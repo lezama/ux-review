@@ -33,6 +33,19 @@ die() {
     exit 1
 }
 
+# Atomically update a key in the config file.
+# Removes ALL existing lines for the key and appends the new value.
+# This prevents duplicate lines that cause `source` to read stale state.
+_config_set() {
+    local config_file="$1"
+    local key="$2"
+    local value="$3"
+    # Remove all lines starting with KEY= (handles duplicates)
+    sed -i '' "/^${key}=/d" "$config_file"
+    # Append the new value
+    echo "${key}=${value}" >> "$config_file"
+}
+
 # Get the state directory for the current recording session
 get_state_dir() {
     local output_dir="$1"
@@ -327,7 +340,7 @@ if let windowList = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? 
         fi
         echo "  Found: WID=${target_wid}"
         # Cache the window ID for future switches
-        sed -i '' "s/^PERSONA_${persona}_WID=.*/PERSONA_${persona}_WID=${target_wid}/" "${state_dir}/config"
+        _config_set "${state_dir}/config" "PERSONA_${persona}_WID" "\"${target_wid}\""
     fi
 
     # Determine recording file — each persona segment gets a numbered file
@@ -341,7 +354,7 @@ if let windowList = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? 
     echo "$sc_pid" > "${state_dir}/screencapture.pid"
 
     # Update active persona
-    sed -i '' "s/^ACTIVE_PERSONA=.*/ACTIVE_PERSONA=${persona}/" "${state_dir}/config"
+    _config_set "${state_dir}/config" "ACTIVE_PERSONA" "\"${persona}\""
 
     sleep 0.5
     echo "Now recording: ${persona} (PID ${sc_pid})"
@@ -425,11 +438,7 @@ cmd_pause() {
     fi
 
     # Mark as paused
-    if grep -q '^PAUSED=' "${state_dir}/config"; then
-        sed -i '' 's/^PAUSED=.*/PAUSED=true/' "${state_dir}/config"
-    else
-        echo 'PAUSED=true' >> "${state_dir}/config"
-    fi
+    _config_set "${state_dir}/config" "PAUSED" "true"
 
     echo "Recording paused (was recording ${ACTIVE_PERSONA})"
     echo "Use 'resume' to continue recording."
@@ -476,7 +485,7 @@ cmd_resume() {
     echo "$sc_pid" > "${state_dir}/screencapture.pid"
 
     # Mark as not paused
-    sed -i '' 's/^PAUSED=.*/PAUSED=false/' "${state_dir}/config"
+    _config_set "${state_dir}/config" "PAUSED" "false"
 
     sleep 0.5
     echo "Recording resumed for ${ACTIVE_PERSONA} (PID ${sc_pid})"
@@ -1199,6 +1208,634 @@ PYEOF
     echo "  -> ${output}"
 }
 
+# Generate a title card (diapo) MP4 clip from a text file.
+# Usage: record-window.sh diapo <output-dir> <text-file> [--duration N]
+cmd_diapo() {
+    local output_dir="${2:-}"
+    local text_file="${3:-}"
+    local duration=5
+
+    # Parse optional flags
+    shift 3 2>/dev/null || true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --duration) duration="$2"; shift 2 ;;
+            *) die "Unknown flag: $1" ;;
+        esac
+    done
+
+    [[ -z "$output_dir" || -z "$text_file" ]] && \
+        die "Usage: record-window.sh diapo <output-dir> <text-file> [--duration N]"
+    [[ -f "$text_file" ]] || die "Text file not found: ${text_file}"
+
+    mkdir -p "$output_dir"
+
+    local output_file="${output_dir}/diapo.mp4"
+
+    echo "Generating title card from ${text_file} (${duration}s)..."
+
+    python3 - "$text_file" "$output_file" "$duration" "$output_dir" <<'PYEOF'
+import os
+import subprocess
+import sys
+import textwrap
+
+text_file = sys.argv[1]
+output_file = sys.argv[2]
+duration = int(sys.argv[3])
+tmp_dir = sys.argv[4]
+
+with open(text_file) as f:
+    raw_text = f.read().strip()
+
+header = "UX Simulator"
+
+# Wrap body text to ~55 chars per line for readability at fontsize 28
+wrapped_lines = []
+for line in raw_text.split("\n"):
+    if len(line) > 60:
+        wrapped_lines.extend(textwrap.wrap(line, width=55))
+    else:
+        wrapped_lines.append(line)
+body_text = "\n".join(wrapped_lines)
+
+# Escape special characters for ffmpeg drawtext (inline text)
+def escape_drawtext(text):
+    return (text
+        .replace("\\", "\\\\\\\\")
+        .replace("'", "\u2019")
+        .replace(":", "\\:")
+        .replace("%", "%%"))
+
+escaped_header = escape_drawtext(header)
+
+# Write body to temp file (ffmpeg textfile= handles newlines properly)
+body_file = os.path.join(tmp_dir, ".diapo-body.txt")
+with open(body_file, "w") as f:
+    f.write(body_text)
+
+# Escape the body file path for ffmpeg
+body_path_escaped = body_file.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+bg_color = "0x1a1a2e"
+w, h = 1920, 1080
+
+cmd = [
+    "ffmpeg", "-y",
+    "-f", "lavfi",
+    "-i", f"color=c={bg_color}:s={w}x{h}:d={duration}:r=30",
+    "-vf", (
+        f"drawtext=text='{escaped_header}'"
+        f":fontsize=64:fontcolor=white:font=Helvetica"
+        f":x=(w-text_w)/2:y=120"
+        f",drawtext=textfile='{body_path_escaped}'"
+        f":fontsize=28:fontcolor=0xcccccc:font=Courier"
+        f":x=200:y=280"
+        f":line_spacing=14"
+    ),
+    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+    "-pix_fmt", "yuv420p", "-an",
+    output_file
+]
+
+result = subprocess.run(cmd, capture_output=True, text=True)
+
+# Clean up temp file
+try:
+    os.unlink(body_file)
+except OSError:
+    pass
+
+if result.returncode != 0:
+    print(f"ERROR: ffmpeg failed: {result.stderr[:500]}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"Title card: {output_file} ({duration}s)")
+PYEOF
+
+    echo "  -> ${output_file}"
+}
+
+# Generate TTS audio for a narration line.
+# Returns the duration in seconds. Saves the audio segment to the output dir.
+#
+# Usage: record-window.sh narrate <output-dir> <text> [--voice <voice>]
+#
+# The caller uses this in the narrate-then-act loop:
+#   1. (recording is paused)
+#   2. narrate → generates TTS, prints DURATION_SEC=N.NNN
+#   3. resume recording
+#   4. sleep for DURATION_SEC (viewer sees the state being narrated)
+#   5. perform the browser action (viewer sees the transition)
+#   6. pause recording
+#   7. goto 1
+cmd_narrate() {
+    local output_dir="${2:-}"
+    local text="${3:-}"
+    local voice="Samantha"
+
+    # Parse optional flags
+    shift 3 2>/dev/null || true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --voice) voice="$2"; shift 2 ;;
+            *) die "Unknown flag: $1" ;;
+        esac
+    done
+
+    [[ -z "$output_dir" || -z "$text" ]] && \
+        die "Usage: record-window.sh narrate <output-dir> <text> [--voice <voice>]"
+
+    mkdir -p "${output_dir}/audio"
+
+    # Determine segment index
+    local seg_count
+    seg_count=$(find "${output_dir}/audio" -name 'narr-*.aiff' 2>/dev/null | wc -l | tr -d ' ')
+
+    local aiff_path="${output_dir}/audio/narr-${seg_count}.aiff"
+
+    say -v "$voice" -o "$aiff_path" "$text"
+
+    local duration
+    duration=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$aiff_path" 2>/dev/null)
+
+    echo "NARRATION_FILE=${aiff_path}"
+    echo "NARRATION_INDEX=${seg_count}"
+    echo "DURATION_SEC=${duration}"
+}
+
+# Combine all narration audio segments into a single track, then mux with video.
+#
+# Usage: record-window.sh mux <output-dir> <video.mp4> <output.mp4>
+#
+# Concatenates all narr-*.aiff files from <output-dir>/audio/ in order,
+# converts to AAC, and muxes with the video. Video and audio durations
+# are matched by the narrate-then-act loop — this just joins them.
+cmd_mux() {
+    local output_dir="${2:-}"
+    local video="${3:-}"
+    local output="${4:-}"
+
+    [[ -z "$output_dir" || -z "$video" || -z "$output" ]] && \
+        die "Usage: record-window.sh mux <output-dir> <video.mp4> <output.mp4>"
+    [[ -f "$video" ]] || die "Video file not found: ${video}"
+
+    local audio_dir="${output_dir}/audio"
+    local segments
+    segments=$(ls "${audio_dir}"/narr-*.aiff 2>/dev/null | sort)
+
+    if [[ -z "$segments" ]]; then
+        echo "No narration segments found — copying video as-is"
+        cp "$video" "$output"
+        echo "  -> ${output}"
+        return 0
+    fi
+
+    local seg_count
+    seg_count=$(echo "$segments" | wc -l | tr -d ' ')
+    echo "Muxing ${seg_count} narration segments with video..."
+
+    local narration_m4a="${audio_dir}/narration.m4a"
+
+    if [[ "$seg_count" -eq 1 ]]; then
+        local single_file
+        single_file=$(echo "$segments" | head -1)
+        ffmpeg -y -i "$single_file" -c:a aac -b:a 128k "$narration_m4a" 2>/dev/null
+    else
+        # Build ffmpeg concat command
+        local inputs="" filter_inputs="" idx=0
+        while IFS= read -r seg_file; do
+            inputs="${inputs} -i ${seg_file}"
+            filter_inputs="${filter_inputs}[${idx}:a]"
+            idx=$((idx + 1))
+        done <<< "$segments"
+
+        local filter="${filter_inputs}concat=n=${idx}:v=0:a=1[out]"
+        ffmpeg -y ${inputs} -filter_complex "$filter" -map "[out]" \
+            -c:a aac -b:a 128k "$narration_m4a" 2>/dev/null
+    fi
+
+    local audio_dur video_dur
+    audio_dur=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$narration_m4a")
+    video_dur=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$video")
+    echo "  Audio: ${audio_dur}s, Video: ${video_dur}s"
+
+    # Mux video + audio. Use -shortest to handle minor drift.
+    ffmpeg -y -i "$video" -i "$narration_m4a" \
+        -c:v copy -c:a aac -b:a 128k -shortest \
+        "$output" 2>/dev/null
+
+    echo "  -> ${output}"
+}
+
+# ============================================================================
+# Session-based commands — Screenshot-first recording (v2)
+#
+# These replace the screencapture start/stop dance with a deterministic,
+# verified screenshot capture workflow:
+#
+#   session-start <output-dir> --personas admin,buyer,recipient
+#   session-capture <output-dir> <persona> <file.png>
+#   session-narrate <output-dir> <text> [--voice <voice>]
+#   session-scene <output-dir> <name> [--layout <layout>] [--speaker <persona>] [--narration <text>]
+#   session-end <output-dir> [--skip-mux]
+#
+# The agent drives the loop: take_screenshot → session-capture → browser action → repeat
+# ============================================================================
+
+cmd_session_start() {
+    local output_dir="${2:-}"
+    local personas_csv=""
+
+    shift 2 2>/dev/null || true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --personas) personas_csv="$2"; shift 2 ;;
+            *) die "Unknown flag: $1" ;;
+        esac
+    done
+
+    [[ -z "$output_dir" ]] && \
+        die "Usage: record-window.sh session-start <output-dir> --personas admin,buyer,recipient"
+
+    mkdir -p "$output_dir"
+
+    # Create screenshot directories for each persona
+    IFS=',' read -ra persona_arr <<< "${personas_csv:-default}"
+    for p in "${persona_arr[@]}"; do
+        mkdir -p "${output_dir}/screenshots/${p}"
+    done
+
+    # Initialize empty action log
+    : > "${output_dir}/action-log.jsonl"
+
+    # Write session state
+    local state_file="${output_dir}/.session-state.json"
+    local personas_json="["
+    local first=true
+    for p in "${persona_arr[@]}"; do
+        $first || personas_json+=","
+        personas_json+="\"${p}\""
+        first=false
+    done
+    personas_json+="]"
+
+    cat > "$state_file" <<STATEOF
+{
+    "startTime": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+    "startEpochMs": $(python3 -c "import time; print(int(time.time()*1000))"),
+    "outputDir": "${output_dir}",
+    "personas": ${personas_json},
+    "status": "recording"
+}
+STATEOF
+
+    # Preflight checks
+    local checks_passed=true
+    echo "Session preflight:"
+
+    if command -v ffmpeg &>/dev/null; then
+        echo "  [OK] ffmpeg"
+    else
+        echo "  [FAIL] ffmpeg not found — install with: brew install ffmpeg"
+        checks_passed=false
+    fi
+
+    if command -v say &>/dev/null; then
+        echo "  [OK] say (macOS TTS)"
+    else
+        echo "  [FAIL] say not found — macOS required"
+        checks_passed=false
+    fi
+
+    if [[ -w "$output_dir" ]]; then
+        echo "  [OK] output dir writable"
+    else
+        echo "  [FAIL] output dir not writable: ${output_dir}"
+        checks_passed=false
+    fi
+
+    local disk_avail
+    disk_avail=$(df -k "$output_dir" | awk 'NR==2 {print int($4/1024)}')
+    if [[ "$disk_avail" -gt 500 ]]; then
+        echo "  [OK] disk space: ${disk_avail}MB available"
+    else
+        echo "  [WARN] low disk space: ${disk_avail}MB"
+    fi
+
+    if $checks_passed; then
+        echo ""
+        echo "Session started: ${output_dir}"
+        echo "Personas: ${personas_csv:-default}"
+        echo "Action log: ${output_dir}/action-log.jsonl"
+    else
+        echo ""
+        echo "WARNING: Some preflight checks failed"
+    fi
+}
+
+# Verify and log a screenshot capture.
+# The agent has already taken the screenshot via MCP — this just verifies and logs it.
+cmd_session_capture() {
+    local output_dir="${2:-}"
+    local persona="${3:-}"
+    local file_path="${4:-}"
+    local duration_ms=""
+
+    shift 4 2>/dev/null || true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --duration) duration_ms="$2"; shift 2 ;;
+            *) die "Unknown flag: $1" ;;
+        esac
+    done
+
+    [[ -z "$output_dir" || -z "$persona" || -z "$file_path" ]] && \
+        die "Usage: record-window.sh session-capture <output-dir> <persona> <file.png> [--duration <ms>]"
+
+    local state_file="${output_dir}/.session-state.json"
+    [[ -f "$state_file" ]] || die "No active session in ${output_dir}. Run session-start first."
+
+    # Verify the screenshot file
+    if [[ ! -f "$file_path" ]]; then
+        echo "VERIFIED=false"
+        echo "ERROR=file_not_found"
+        return 1
+    fi
+
+    local file_size
+    file_size=$(wc -c < "$file_path" | tr -d ' ')
+    if [[ "$file_size" -lt 1024 ]]; then
+        echo "VERIFIED=false"
+        echo "ERROR=file_too_small"
+        echo "SIZE=${file_size}"
+        return 1
+    fi
+
+    # Compute timestamp relative to session start
+    local start_epoch_ms
+    start_epoch_ms=$(python3 -c "import json; print(json.load(open('${state_file}'))['startEpochMs'])")
+    local now_ms
+    now_ms=$(python3 -c "import time; print(int(time.time()*1000))")
+    local timestamp_ms=$(( now_ms - start_epoch_ms ))
+
+    # Compute frame number from action log entries for this persona
+    # (counts previously logged screenshots — the current file hasn't been logged yet)
+    local frame_count
+    frame_count=$(grep -c "\"persona\": \"${persona}\", \"action\": \"screenshot\"" "${output_dir}/action-log.jsonl" 2>/dev/null || true)
+    frame_count=${frame_count:-0}
+
+    # Compute relative path from screenshots dir
+    local screenshots_dir="${output_dir}/screenshots"
+    local rel_path="${file_path#${screenshots_dir}/}"
+
+    # Auto-use pending narration duration if no explicit --duration given.
+    # The pending file is written by session-narrate and consumed here (once).
+    if [[ -z "$duration_ms" ]]; then
+        local pending_file="${output_dir}/.pending-narration-duration"
+        if [[ -f "$pending_file" ]]; then
+            duration_ms=$(cat "$pending_file")
+            rm -f "$pending_file"
+        fi
+    fi
+
+    # Build action log entry
+    local duration_field=""
+    [[ -n "$duration_ms" ]] && duration_field=", \"durationMs\": ${duration_ms}"
+
+    echo "{\"frame\": ${frame_count}, \"timestampMs\": ${timestamp_ms}, \"persona\": \"${persona}\", \"action\": \"screenshot\", \"screenshotFile\": \"${rel_path}\"${duration_field}}" \
+        >> "${output_dir}/action-log.jsonl"
+
+    echo "VERIFIED=true"
+    echo "FRAME=${frame_count}"
+    echo "TIMESTAMP_MS=${timestamp_ms}"
+    echo "FILE=${file_path}"
+    echo "SIZE=${file_size}"
+}
+
+# Generate TTS narration for a session.
+# Wrapper around existing cmd_narrate, but also logs to the session action log.
+cmd_session_narrate() {
+    local output_dir="${2:-}"
+    local text="${3:-}"
+    local voice="Samantha"
+    local persona=""
+
+    shift 3 2>/dev/null || true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --voice) voice="$2"; shift 2 ;;
+            --persona) persona="$2"; shift 2 ;;
+            *) die "Unknown flag: $1" ;;
+        esac
+    done
+
+    [[ -z "$output_dir" || -z "$text" ]] && \
+        die "Usage: record-window.sh session-narrate <output-dir> <text> [--voice <voice>] [--persona <name>]"
+
+    local state_file="${output_dir}/.session-state.json"
+    [[ -f "$state_file" ]] || die "No active session in ${output_dir}. Run session-start first."
+
+    mkdir -p "${output_dir}/audio"
+
+    local seg_count
+    seg_count=$(find "${output_dir}/audio" -name 'narr-*.aiff' 2>/dev/null | wc -l | tr -d ' ')
+
+    local aiff_path="${output_dir}/audio/narr-${seg_count}.aiff"
+
+    say -v "$voice" -o "$aiff_path" "$text"
+
+    local duration
+    duration=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$aiff_path" 2>/dev/null)
+
+    local duration_ms
+    duration_ms=$(python3 -c "print(int(float('${duration}') * 1000))")
+
+    # Resolve persona — use first persona from session if not specified
+    [[ -z "$persona" ]] && \
+        persona=$(python3 -c "import json; print(json.load(open('${state_file}'))['personas'][0])")
+
+    # Compute timestamp relative to session start
+    local start_epoch_ms
+    start_epoch_ms=$(python3 -c "import json; print(json.load(open('${state_file}'))['startEpochMs'])")
+    local now_ms
+    now_ms=$(python3 -c "import time; print(int(time.time()*1000))")
+    local timestamp_ms=$(( now_ms - start_epoch_ms ))
+
+    # Escape narration text for JSON
+    local text_json
+    text_json=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
+
+    # Log narration entry to action log
+    echo "{\"frame\": ${seg_count}, \"timestampMs\": ${timestamp_ms}, \"persona\": \"${persona}\", \"action\": \"narration\", \"narration\": ${text_json}, \"audioFile\": \"audio/narr-${seg_count}.aiff\", \"durationMs\": ${duration_ms}}" \
+        >> "${output_dir}/action-log.jsonl"
+
+    # Write pending narration duration — next session-capture will auto-use it
+    echo "$duration_ms" > "${output_dir}/.pending-narration-duration"
+
+    echo "NARRATION_FILE=${aiff_path}"
+    echo "NARRATION_INDEX=${seg_count}"
+    echo "DURATION_SEC=${duration}"
+    echo "DURATION_MS=${duration_ms}"
+}
+
+# Mark a scene boundary in the session action log.
+cmd_session_scene() {
+    local output_dir="${2:-}"
+    local scene_name="${3:-}"
+    local layout="full"
+    local speaker=""
+    local narration=""
+    local hold_ms=""
+
+    shift 3 2>/dev/null || true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --layout) layout="$2"; shift 2 ;;
+            --speaker) speaker="$2"; shift 2 ;;
+            --narration) narration="$2"; shift 2 ;;
+            --hold) hold_ms="$2"; shift 2 ;;
+            *) die "Unknown flag: $1" ;;
+        esac
+    done
+
+    [[ -z "$output_dir" || -z "$scene_name" ]] && \
+        die "Usage: record-window.sh session-scene <output-dir> <name> [--layout <layout>] [--speaker <persona>] [--narration <text>] [--hold <ms>]"
+
+    local state_file="${output_dir}/.session-state.json"
+    [[ -f "$state_file" ]] || die "No active session in ${output_dir}. Run session-start first."
+
+    # Get session start time
+    local start_epoch_ms
+    start_epoch_ms=$(python3 -c "import json; print(json.load(open('${state_file}'))['startEpochMs'])")
+    local now_ms
+    now_ms=$(python3 -c "import time; print(int(time.time()*1000))")
+    local timestamp_ms=$(( now_ms - start_epoch_ms ))
+
+    # Use first persona as default speaker
+    [[ -z "$speaker" ]] && \
+        speaker=$(python3 -c "import json; print(json.load(open('${state_file}'))['personas'][0])")
+
+    # Compute frame number for this speaker from action log
+    local frame_count
+    frame_count=$(grep -c "\"persona\": \"${speaker}\", \"action\": \"screenshot\"" "${output_dir}/action-log.jsonl" 2>/dev/null || true)
+    frame_count=${frame_count:-0}
+
+    # Build optional fields
+    local narration_field=""
+    [[ -n "$narration" ]] && narration_field=", \"narration\": $(python3 -c "import json; print(json.dumps('${narration}'))")"
+
+    local hold_field=""
+    [[ -n "$hold_ms" ]] && hold_field=", \"holdMs\": ${hold_ms}"
+
+    echo "{\"frame\": ${frame_count}, \"timestampMs\": ${timestamp_ms}, \"persona\": \"${speaker}\", \"action\": \"scene\", \"target\": \"${scene_name}\", \"layout\": \"${layout}\"${narration_field}${hold_field}}" \
+        >> "${output_dir}/action-log.jsonl"
+
+    echo "Scene '${scene_name}' logged (layout: ${layout}, speaker: ${speaker})"
+}
+
+# End a recording session — assemble screenshots into video and mux with narration.
+cmd_session_end() {
+    local output_dir="${2:-}"
+    local skip_mux=false
+
+    shift 2 2>/dev/null || true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --skip-mux) skip_mux=true; shift ;;
+            *) die "Unknown flag: $1" ;;
+        esac
+    done
+
+    [[ -z "$output_dir" ]] && \
+        die "Usage: record-window.sh session-end <output-dir> [--skip-mux]"
+
+    local action_log="${output_dir}/action-log.jsonl"
+    [[ -f "$action_log" ]] || die "Action log not found: ${action_log}"
+
+    echo "=== Session End ==="
+    echo ""
+
+    # Step 1: Report stats
+    local total_screenshots
+    total_screenshots=$(grep -c '"action": "screenshot"' "$action_log" 2>/dev/null || echo 0)
+    local total_scenes
+    total_scenes=$(grep -c '"action": "scene"' "$action_log" 2>/dev/null || echo 0)
+    local total_narrations
+    total_narrations=$(grep -c '"action": "narration"' "$action_log" 2>/dev/null || echo 0)
+    echo "Stats: ${total_screenshots} screenshots, ${total_scenes} scenes, ${total_narrations} narrations"
+
+    # Step 2: Assemble screenshots into per-persona videos
+    echo ""
+    echo "--- Assembling per-persona videos ---"
+    cmd_assemble "" "$output_dir" "$action_log"
+
+    if $skip_mux; then
+        echo ""
+        echo "Skipping mux (--skip-mux). Per-persona videos ready in ${output_dir}/"
+        return 0
+    fi
+
+    # Step 3: Find assembled videos
+    local assembled_videos=()
+    for f in "${output_dir}"/*-assembled.mp4; do
+        [[ -f "$f" ]] && assembled_videos+=("$f")
+    done
+
+    if [[ ${#assembled_videos[@]} -eq 0 ]]; then
+        echo "WARNING: No assembled videos found"
+        return 1
+    fi
+
+    echo ""
+    echo "Assembled videos: ${assembled_videos[*]}"
+
+    # Step 4: If single persona, mux directly. If multiple, note that scene composition is separate.
+    if [[ ${#assembled_videos[@]} -eq 1 ]]; then
+        local video="${assembled_videos[0]}"
+        local final_output="${output_dir}/final.mp4"
+
+        echo ""
+        echo "--- Muxing single-persona video with narration ---"
+        cmd_mux "" "$output_dir" "$video" "$final_output"
+
+        echo ""
+        echo "=== Final video: ${final_output} ==="
+    else
+        echo ""
+        echo "Multiple personas detected. Per-persona videos assembled."
+        echo "For multi-persona composition, use the TypeScript SceneComposer:"
+        echo "  1. Each persona video: ${output_dir}/<persona>-assembled.mp4"
+        echo "  2. Audio: ${output_dir}/audio/"
+        echo "  3. Action log: ${action_log}"
+        echo ""
+
+        # If there's a simple two-persona case, try muxing the first one as a default
+        local first_video="${assembled_videos[0]}"
+        local final_output="${output_dir}/final.mp4"
+        echo "--- Muxing first persona video as default ---"
+        cmd_mux "" "$output_dir" "$first_video" "$final_output"
+
+        echo ""
+        echo "=== Default video: ${final_output} ==="
+        echo "(For full composition with layouts, use SceneComposer)"
+    fi
+
+    # Step 5: Update session state
+    local state_file="${output_dir}/.session-state.json"
+    if [[ -f "$state_file" ]]; then
+        python3 -c "
+import json
+with open('${state_file}') as f:
+    state = json.load(f)
+state['status'] = 'completed'
+state['endTime'] = '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+with open('${state_file}', 'w') as f:
+    json.dump(state, f, indent=4)
+"
+    fi
+}
+
 # Main dispatch
 case "$COMMAND" in
     start)    cmd_start "$@" ;;
@@ -1211,20 +1848,40 @@ case "$COMMAND" in
     trim)     cmd_trim "$@" ;;
     crop)     cmd_crop "$@" ;;
     assemble) cmd_assemble "$@" ;;
+    diapo)    cmd_diapo "$@" ;;
+    narrate)  cmd_narrate "$@" ;;
+    mux)      cmd_mux "$@" ;;
+    session-start)   cmd_session_start "$@" ;;
+    session-capture) cmd_session_capture "$@" ;;
+    session-narrate) cmd_session_narrate "$@" ;;
+    session-scene)   cmd_session_scene "$@" ;;
+    session-end)     cmd_session_end "$@" ;;
     *)
-        echo "Usage: record-window.sh <start|switch|stop|pause|resume|position|split|trim|crop|assemble>"
+        echo "Usage: record-window.sh <command>"
         echo ""
-        echo "Commands:"
+        echo "Screenshot-based recording (v2 — preferred):"
+        echo "  session-start <dir> --personas a,b,c  Start session, run preflight"
+        echo "  session-capture <dir> <persona> <png> Verify + log a screenshot"
+        echo "  session-narrate <dir> <text> [flags]  Generate TTS, print duration"
+        echo "  session-scene <dir> <name> [flags]    Mark scene boundary"
+        echo "  session-end <dir> [--skip-mux]        Assemble video + mux audio"
+        echo ""
+        echo "Screen recording (v1 — legacy):"
         echo "  start <output-dir> [--viewport WxH]  Start recording Chrome window"
         echo "  switch <persona>                      Switch to recording another persona's window"
         echo "  stop                                  Stop recording gracefully"
         echo "  pause                                 Pause recording (stop capture, keep state)"
         echo "  resume                                Resume recording after pause"
         echo "  position                              Show current recording state"
+        echo ""
+        echo "Post-processing:"
         echo "  split <output-dir> <action-log.jsonl> Process recordings into per-persona videos"
         echo "  trim <input> <output> [--freeze-threshold N]  Remove frozen frames from video"
         echo "  crop <input> <output>                 Remove browser chrome from recording"
-        echo "  assemble <output-dir> <log.jsonl>     Assemble screenshots into video (headless mode)"
+        echo "  assemble <output-dir> <log.jsonl>     Assemble screenshots into video"
+        echo "  diapo <output-dir> <text-file> [--duration N]  Generate title card video clip"
+        echo "  narrate <output-dir> <text> [--voice V]    Generate TTS audio, print duration"
+        echo "  mux <output-dir> <video> <output>          Combine narration audio with video"
         echo ""
         echo "Environment:"
         echo "  RECORDING_OUTPUT_DIR              Output directory (for switch/stop/position)"
