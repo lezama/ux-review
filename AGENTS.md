@@ -20,10 +20,11 @@ Or add to your project's `.claude/settings.json`:
 
 ### Requirements
 
-- **macOS** (uses `say` for TTS narration)
+- **macOS** (fallback to `say` for TTS narration)
 - **Node.js** >= 20
 - **ffmpeg** (`brew install ffmpeg`)
 - **Chrome** or **Chrome Beta** (`brew install --cask google-chrome-beta`)
+- **Kokoro TTS** (optional, high-quality local TTS — auto-detected)
 
 ### First-time setup
 
@@ -32,6 +33,19 @@ cd /path/to/ux-simulator
 npm install && npm run build
 chmod +x bin/record-window.sh
 ```
+
+### Kokoro TTS (recommended)
+
+High-quality local TTS with natural-sounding voices. Auto-detected when installed:
+
+```bash
+pip3.11 install kokoro soundfile
+```
+
+Set `TTS_ENGINE` to control which engine is used:
+- `TTS_ENGINE=auto` — Use Kokoro if available, else macOS `say` (default)
+- `TTS_ENGINE=kokoro` — Force Kokoro (fails if not installed)
+- `TTS_ENGINE=say` — Force macOS `say`
 
 ## Usage
 

@@ -1682,10 +1682,21 @@ cmd_session_narrate() {
 
     local aiff_path="${output_dir}/audio/narr-${seg_count}.aiff"
 
-    say -v "$voice" -o "$aiff_path" "$text"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local kokoro_script="${script_dir}/kokoro-say.py"
+    local tts_engine="${TTS_ENGINE:-auto}"
 
-    local duration
-    duration=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$aiff_path" 2>/dev/null)
+    if [[ "$tts_engine" == "kokoro" ]] || { [[ "$tts_engine" == "auto" ]] && [[ -f "$kokoro_script" ]] && command -v python3.11 &>/dev/null; }; then
+        local kokoro_output
+        kokoro_output=$(python3.11 "$kokoro_script" -v "$voice" -o "$aiff_path" "$text" 2>/dev/null)
+        local duration
+        duration="${kokoro_output:-0}"
+    else
+        say -v "$voice" -o "$aiff_path" "$text"
+        local duration
+        duration=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$aiff_path" 2>/dev/null)
+    fi
 
     local duration_ms
     duration_ms=$(awk "BEGIN {printf \"%d\", ${duration} * 1000}")
@@ -1779,6 +1790,69 @@ cmd_session_scene() {
         >> "${output_dir}/action-log.jsonl"
 
     echo "Scene '${scene_name}' logged (layout: ${layout}, speaker: ${speaker})"
+}
+
+# Combined step: scene (optional) + narrate (optional) + capture in ONE call.
+# This minimizes the number of Bash tool invocations (and permission prompts).
+cmd_session_step() {
+    local output_dir="${2:-}"
+    [[ -z "$output_dir" ]] && die "Usage: record-window.sh session-step <output-dir> [options]
+
+Options:
+  --scene <name>          Start a new scene
+  --layout <layout>       Scene layout (full|split|pip-<name>)
+  --speaker <persona>     Active persona
+  --narrate <text>        Narration text (short! 1-2 sentences)
+  --voice <voice>         TTS voice name (default: Samantha)
+  --capture <persona> <file.png>   Capture a screenshot (repeatable)
+"
+
+    shift 2 2>/dev/null || true
+
+    local scene_name="" layout="full" speaker="" voice="Samantha"
+    local narrate_text=""
+    local -a captures=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --scene) scene_name="$2"; shift 2 ;;
+            --layout) layout="$2"; shift 2 ;;
+            --speaker) speaker="$2"; shift 2 ;;
+            --narrate) narrate_text="$2"; shift 2 ;;
+            --voice) voice="$2"; shift 2 ;;
+            --capture)
+                # Consume persona and file path
+                [[ -z "${2:-}" || -z "${3:-}" ]] && die "--capture requires <persona> <file.png>"
+                captures+=("$2" "$3")
+                shift 3 ;;
+            *) die "Unknown flag: $1" ;;
+        esac
+    done
+
+    # Execute scene marker if requested
+    if [[ -n "$scene_name" ]]; then
+        local scene_args=("session-step" "$output_dir" "$scene_name")
+        [[ -n "$layout" ]] && scene_args+=(--layout "$layout")
+        [[ -n "$speaker" ]] && scene_args+=(--speaker "$speaker")
+        cmd_session_scene "${scene_args[@]}"
+    fi
+
+    # Execute narration if requested
+    if [[ -n "$narrate_text" ]]; then
+        local narrate_args=("session-step" "$output_dir" "$narrate_text")
+        narrate_args+=(--voice "$voice")
+        [[ -n "$speaker" ]] && narrate_args+=(--persona "$speaker")
+        cmd_session_narrate "${narrate_args[@]}"
+    fi
+
+    # Execute captures (pairs of persona + file)
+    local i=0
+    while [[ $i -lt ${#captures[@]} ]]; do
+        local cap_persona="${captures[$i]}"
+        local cap_file="${captures[$((i+1))]}"
+        cmd_session_capture "session-step" "$output_dir" "$cap_persona" "$cap_file"
+        i=$(( i + 2 ))
+    done
 }
 
 # Compose multi-persona video from a completed session.
@@ -1913,6 +1987,7 @@ case "$COMMAND" in
     session-capture) cmd_session_capture "$@" ;;
     session-narrate) cmd_session_narrate "$@" ;;
     session-scene)   cmd_session_scene "$@" ;;
+    session-step)    cmd_session_step "$@" ;;
     session-end)     cmd_session_end "$@" ;;
     session-compose) cmd_session_compose "$@" ;;
     *)

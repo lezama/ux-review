@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*/record-window.sh *)",
+      "Bash(*/ux-simulator/bin/*)",
+      "Bash(UX_SIM*)",
+      "Bash(OUTPUT_DIR*)",
+      "Bash(mkdir *)",
+      "Bash(cd */ux-simulator*)",
+      "Bash(npm run build*)",
+      "Bash(ffprobe *)",
+      "Bash(ffmpeg *)",
+      "Bash(python3.11 */kokoro-say.py *)",
+      "Bash(ls *ux-review*)",
+      "Bash(cat *ux-review*)",
+      "Bash(find ~/dev*ux-simulator*)"
+    ]
+  }
+}

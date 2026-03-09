@@ -95,53 +95,88 @@ Output: /tmp/ux-review-[timestamp]/
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Ask: **"Does this look right? Should I adjust any tasks or add anything to watch for?"**
-
-Wait for confirmation before proceeding. If the user adjusts, update the script and re-confirm.
+Present the plan briefly, then **proceed immediately** — do not ask for confirmation. The user already told you what to test; just do it. Only stop if something is truly ambiguous (e.g., you don't know the URL or credentials).
 
 ## Phase 3: Execute the Test
 
-Once approved, execute the test script using the UX Simulator.
-
 ### Setup
 
+Set up environment in ONE bash call:
+
 ```bash
-UX_SIM_DIR="$(find ~/dev -name 'ux-simulator' -type d 2>/dev/null | head -1)"
-OUTPUT_DIR="/tmp/ux-review-$(date +%s)"
+UX_SIM_DIR="$(find ~/dev -maxdepth 4 -name 'record-window.sh' -path '*/ux-simulator/bin/*' 2>/dev/null | head -1 | xargs dirname | xargs dirname)" && OUTPUT_DIR="/tmp/ux-review-$(date +%s)" && RW="$UX_SIM_DIR/bin/record-window.sh" && [[ -f "$UX_SIM_DIR/dist/lib/ffmpeg-utils.js" ]] || (cd "$UX_SIM_DIR" && npm run build) && "$RW" session-start "$OUTPUT_DIR" --personas [persona1],[persona2] && echo "RW=$RW" && echo "OUTPUT_DIR=$OUTPUT_DIR"
+```
 
-# Build if needed
-cd "$UX_SIM_DIR" && npm run build
+### The `session-step` Command
 
-# Initialize session
-"$UX_SIM_DIR/bin/record-window.sh" session-start "$OUTPUT_DIR" --personas [persona1],[persona2]
+**Use `session-step` for ALL recording operations.** It combines scene + narrate + capture into a SINGLE bash call, so users only see ONE permission prompt per step instead of 3-4.
+
+```bash
+"$RW" session-step "$OUTPUT_DIR" \
+  --scene "login" --layout full --speaker admin \
+  --narrate "I see the login page." --voice Samantha \
+  --capture admin /path/to/screenshot.png
+```
+
+All flags are optional — use only what you need:
+
+```bash
+# Just capture a screenshot (no narration)
+"$RW" session-step "$OUTPUT_DIR" --capture admin /path/to/screenshot.png
+
+# Narrate + capture
+"$RW" session-step "$OUTPUT_DIR" --narrate "Clean layout." --voice Samantha --capture admin /path/to/shot.png
+
+# New scene + narrate + capture
+"$RW" session-step "$OUTPUT_DIR" --scene "checkout" --speaker admin --narrate "Moving to checkout." --capture admin /path/to/shot.png
+
+# Multiple captures in one call
+"$RW" session-step "$OUTPUT_DIR" --capture admin /path/to/shot1.png --capture admin /path/to/shot2.png
 ```
 
 ### Recording Loop
 
-For each task in the test script, follow the **narrate-then-act** pattern:
+For each task, follow the **observe-act-observe** rhythm. **Narrations must be SHORT (1-2 sentences, 3-5 seconds of speech).**
 
-1. **Mark scene boundary**:
+**The rhythm:**
+
+1. **Take screenshot** (MCP: `take_screenshot`)
+2. **Step with scene + narrate + capture** (ONE bash call):
    ```bash
-   "$UX_SIM_DIR/bin/record-window.sh" session-scene "$OUTPUT_DIR" "task-name" --layout full --speaker [persona]
+   "$RW" session-step "$OUTPUT_DIR" --scene "task-name" --layout full --speaker admin \
+     --narrate "I see the login page." --voice Samantha \
+     --capture admin /path/to/screenshot.png
    ```
-
-2. **Narrate what you observe** (first-person, user-tester voice):
+3. **Act** in browser (MCP: click, fill, navigate)
+4. **Take screenshot** (MCP)
+5. **Step with narrate + capture** (ONE bash call):
    ```bash
-   "$UX_SIM_DIR/bin/record-window.sh" session-narrate "$OUTPUT_DIR" "I'm looking at the checkout page. I see a form with..." --voice Samantha
+   "$RW" session-step "$OUTPUT_DIR" --narrate "Logged in. Dashboard looks clean." --voice Samantha \
+     --capture admin /path/to/screenshot.png
    ```
+6. **Act** → **screenshot** → **step** → repeat
 
-3. **Screenshot the current state** (auto-syncs to narration duration):
-   ```
-   take_screenshot on the persona's Chrome DevTools MCP server
-   "$UX_SIM_DIR/bin/record-window.sh" session-capture "$OUTPUT_DIR" [persona] [screenshot-path]
-   ```
+**CRITICAL PACING RULES:**
+- **Max 2 sentences per narration.** If you want to say more, use a separate step.
+- **3-5 seconds per narration.** Never exceed 8 seconds.
+- **Take multiple screenshots** between narrations. The screen should change.
+- **4-6 screenshots per task**, not 1.
 
-4. **Perform the browser action** (click, fill, navigate)
+**Bad** (monologue — NEVER do this):
+```
+--narrate "Here's the gift card page. The header says Gift cards with a subtitle. I can see a table with columns for Name, Status, Balance. There's a Create button..."
+```
+That's 30+ seconds over ONE frozen frame. Unwatchable.
 
-5. **Screenshot the result** (default 1.5s hold):
-   ```
-   take_screenshot → session-capture
-   ```
+**Good** (short bursts):
+```
+take_screenshot → session-step --narrate "I'm on the gift cards page. Clean layout." --capture admin shot1.png
+click "Create"
+take_screenshot → session-step --narrate "Creation form opened." --capture admin shot2.png
+fill name
+take_screenshot → session-step --capture admin shot3.png
+session-step --narrate "Nice, auto-generated a code." --capture admin shot4.png
+```
 
 ### Browser Preparation
 
@@ -152,18 +187,31 @@ Before recording each persona:
 
 ### Narration Guidelines
 
-Narrate like a **real user exploring the product**, not a script reader:
+Narrate as a **first-time user discovering the product**. You do NOT know the codebase, the feature names, or the internal terminology. You're seeing everything fresh.
 
-**Good:** "I'm on the product page. The Add to Cart button is prominent — I'll click it. The cart updated instantly, nice feedback."
+**Persona mindset:**
+- You don't know where things are — you're looking for them
+- You don't use internal names — you describe what you see
+- You react with genuine surprise, confusion, or delight
+- You make mistakes and recover naturally
 
-**Bad:** "Navigating to product page. Clicking Add to Cart button. Cart updates." (robotic)
+**Good (discovering, not knowing):**
+- "Okay, I'm logged in. Let me look around... there's a sidebar with a bunch of options."
+- *(click)* *(screenshot)*
+- "I think this might be under Catalog? Let me check."
+- *(screenshot)*
+- "Oh, there it is. That was easy to find."
 
-**Observe and comment on:**
-- First impressions (layout, clarity, visual hierarchy)
-- Friction (confusion, extra clicks, unclear labels, missing feedback)
-- Delight (smooth animations, helpful tooltips, smart defaults)
-- Errors (broken elements, console errors, unexpected states)
-- Accessibility (contrast, keyboard navigation, screen reader hints)
+**Bad (too knowledgeable):**
+- "I'll navigate to Catalog > Gift Cards to access the gift card management interface." ← Sounds like someone reading docs, not a real user.
+- "The CIAB admin shows the onboarding wizard with setup steps." ← Using internal project names.
+
+**What to comment on (one thing at a time):**
+- First impressions — "Okay, this looks pretty clean."
+- Confusion — "Hmm, not sure what this button does."
+- Discovery — "Oh, I think this is what I need."
+- Delight — "Nice, it filled that in for me."
+- Errors — "Wait, nothing happened."
 
 Use different voices per persona:
 - `-v Samantha` (default), `-v Daniel`, `-v Karen`, `-v Tom`
@@ -213,6 +261,13 @@ Key Findings:
 
 Duration: [X] scenes, [Y] screenshots, [Z] seconds
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Then ask: **"Want me to open the video?"**
+
+If yes, run:
+```bash
+open "[video path]"
 ```
 
 ## Chrome DevTools MCP Servers

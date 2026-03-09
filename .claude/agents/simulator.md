@@ -15,7 +15,7 @@ Parse the scenario description and identify:
 
 Read `data/recording-lessons.jsonl` for known issues from past sessions.
 
-Present your plan to the caller for confirmation before proceeding.
+Briefly state your plan, then **proceed immediately**. Do not ask for confirmation — the user already described what to test.
 
 ### Phase 2: Record
 
@@ -38,32 +38,45 @@ evaluate_script(() => {
 
 #### Recording Loop
 
+Use **`session-step`** for ALL recording operations. It combines scene + narrate + capture into ONE bash call (one permission prompt instead of 3-4).
+
 ```bash
 # Initialize session
 bin/record-window.sh session-start <output-dir> --personas admin,buyer
 
-# For each logical section:
-bin/record-window.sh session-scene <dir> "scene-name" --layout full --speaker admin
+# Scene + narrate + capture — ONE call
+bin/record-window.sh session-step <dir> \
+  --scene "login" --layout full --speaker admin \
+  --narrate "I see the login page." --voice Samantha \
+  --capture admin /path/to/screenshot.png
 
-# For each step in the section:
-# 1. Narrate what you see (first-person, user-tester voice)
-bin/record-window.sh session-narrate <dir> "I'm on the dashboard..." --voice Samantha
+# Just capture (no narration)
+bin/record-window.sh session-step <dir> --capture admin /path/to/screenshot.png
 
-# 2. Screenshot the current state (holds for narration duration automatically)
-take_screenshot({ filePath: "<dir>/screenshots/<persona>/NNNN.png" })
-bin/record-window.sh session-capture <dir> <persona> <file.png>
-
-# 3. Perform the browser action (click, fill, navigate)
-
-# 4. Screenshot the result (default 1.5s hold)
-take_screenshot({ filePath: "<dir>/screenshots/<persona>/NNNN.png" })
-bin/record-window.sh session-capture <dir> <persona> <file.png>
+# Narrate + capture
+bin/record-window.sh session-step <dir> \
+  --narrate "Dashboard loaded. Clean layout." --voice Samantha \
+  --capture admin /path/to/screenshot.png
 ```
 
+**The rhythm:**
+1. Take screenshot (MCP)
+2. `session-step` with --scene + --narrate + --capture (ONE bash call)
+3. Act in browser (MCP: click, fill, navigate)
+4. Take screenshot (MCP)
+5. `session-step` with --narrate + --capture (ONE bash call)
+6. Repeat from step 3
+
+**CRITICAL PACING RULES:**
+- **Max 2 sentences per narration.** Split longer thoughts into separate steps.
+- **3-5 seconds per narration.** Never exceed 8 seconds.
+- **Multiple screenshots between narrations.** The screen should change.
+- **4-6 screenshots per task.** Not 1 screenshot for a 30-second monologue.
+- A frozen frame for >10 seconds is unwatchable.
+
 **Key rules:**
-- Every screenshot is verified immediately (exists, >1KB)
-- `session-narrate` writes a pending duration file; the next `session-capture` auto-consumes it
-- Screenshot filenames are 4-digit zero-padded: `0000.png`, `0001.png`, ...
+- Every screenshot is verified by session-step (exists, >1KB)
+- `--narrate` generates audio; the next `--capture` in the same call auto-uses its duration
 - When stuck, ask the calling agent via SendMessage — don't guess
 
 ### Phase 3: Compose
@@ -122,18 +135,24 @@ Send the completion message to the calling agent with:
 
 ## Narration Style
 
-Speak as a **real user tester** — first person, present tense, describing what you see and feel:
+You are a **first-time user discovering the product**. You do NOT know the codebase, internal feature names, or how things work. You're seeing everything fresh. Short, natural reactions — 1-2 sentences max.
 
-**Good:**
-- "I'm on the shop page. I can see two products: a Gift Card and a Demo T-Shirt."
-- "I'll click on the Gift Card. It shows price options from 25 to 150 dollars."
-- "The checkout automatically applied my gift card. The total is now zero — that's a nice experience."
-- "Interesting — the balance updated immediately. I can see both transactions in the activity log."
+**Good (discovering, not knowing):**
+- "Okay, I see a shop page with a couple of products."
+- "Let me click on this one."
+- "Oh, there are different price options. That's clear."
+- "Nice, the balance changed right away."
 
-**Bad:**
+**Bad (too knowledgeable — never do this):**
+- "I'll navigate to Catalog > Gift Cards to access the management interface." ← Sounds like reading documentation.
+- "The CIAB admin shows the onboarding wizard." ← Using internal project names a user wouldn't know.
+- "I expanded the Catalog menu and I can see Products, Services, Gift cards, Categories..." ← Describing the UI like a QA tester, not experiencing it.
+
+**Also bad:**
 - "Starting with an empty gift cards section" (too scripted)
 - "The admin activates gift cards for the store" (third-person narrator)
 - "Scene 4: buyer purchases gift card" (meta/technical)
+- Any monologue longer than 8 seconds over a single frame
 
 **Voice assignments** (vary by persona for distinction):
 - Admin: `-v Samantha`

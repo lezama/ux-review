@@ -8,6 +8,7 @@ import {
 	AUDIO_PRESET,
 	formatSRTTime,
 	generateSilence,
+	generateSpeech,
 	getFileDuration,
 	OUTPUT_HEIGHT,
 	OUTPUT_WIDTH,
@@ -343,10 +344,7 @@ function generateSceneAudio(
 				tmpDir,
 				`narr-${ i }.aiff`
 			);
-			const voiceFlag = scene.speaker ? `-v ${ scene.speaker }` : '';
-			execSync(
-				`say ${ voiceFlag } -o ${ JSON.stringify( aiffPath ) } ${ JSON.stringify( scene.narration ) }`
-			);
+			generateSpeech( scene.narration, aiffPath, scene.speaker || undefined );
 			segmentFiles.push( aiffPath );
 
 			const speechDuration = getFileDuration( aiffPath );

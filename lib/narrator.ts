@@ -5,6 +5,7 @@ import {
 	concatenateAudio,
 	formatSRTTime,
 	generateSilence,
+	generateSpeech,
 	getFileDuration,
 } from './ffmpeg-utils.js';
 
@@ -117,10 +118,7 @@ export class Narrator {
 			const step = this.steps[ i ];
 			const aiffPath = path.join( outputDir, `segment-${ i }.aiff` );
 
-			const voiceFlag = step.speaker ? `-v ${ step.speaker }` : '';
-			execSync(
-				`say ${ voiceFlag } -o ${ JSON.stringify( aiffPath ) } ${ JSON.stringify( step.text ) }`
-			);
+			generateSpeech( step.text, aiffPath, step.speaker || undefined );
 
 			segmentFiles.push( aiffPath );
 
