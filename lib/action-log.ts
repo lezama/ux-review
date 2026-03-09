@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { isDualPersonaLayout, readJSONL } from './ffmpeg-utils.js';
 import type { Scene, SceneLayout } from './narrator.js';
 
 export interface ActionEntry {
@@ -60,6 +61,22 @@ export class ActionLog {
 	private logPath: string;
 	private screenshotDir: string;
 	private personas: string[];
+
+	/**
+	 * Load an existing session's action log without truncating it.
+	 * Use this for post-recording operations (compose, report).
+	 */
+	static loadFromDirectory( outputDir: string ): ActionLog {
+		const logPath = path.join( outputDir, 'action-log.jsonl' );
+		const entries = readJSONL< ActionEntry >( logPath );
+		const personas = [ ...new Set( entries.map( ( e ) => e.persona ) ) ];
+
+		const log = Object.create( ActionLog.prototype ) as ActionLog;
+		log.logPath = logPath;
+		log.screenshotDir = path.join( outputDir, 'screenshots' );
+		log.personas = personas.length > 0 ? personas : [ 'default' ];
+		return log;
+	}
 
 	constructor( outputDir: string, personas: string[] = [ 'default' ] ) {
 		this.logPath = path.join( outputDir, 'action-log.jsonl' );
@@ -126,9 +143,7 @@ export class ActionLog {
 
 			// Determine primary persona from the scene entry
 			const primaryPersona = sceneEntry.persona ?? this.personas[ 0 ];
-			const needsSecondary =
-				layout === 'split' ||
-				layout.startsWith( 'pip-' );
+			const needsSecondary = isDualPersonaLayout( layout );
 
 			const sceneScreenshots = screenshots.filter(
 				( s ) =>

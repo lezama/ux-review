@@ -1,0 +1,16 @@
+{
+  "name": "ux-simulator",
+  "version": "0.1.0",
+  "description": "Standalone UX simulation and recording service for web apps",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "compose": "node --loader ts-node/esm lib/compose-session.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}

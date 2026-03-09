@@ -1781,6 +1781,31 @@ cmd_session_scene() {
     echo "Scene '${scene_name}' logged (layout: ${layout}, speaker: ${speaker})"
 }
 
+# Compose multi-persona video from a completed session.
+# Uses TypeScript SceneComposer via compose-session.ts.
+cmd_session_compose() {
+    local output_dir="${2:-}"
+    [[ -z "$output_dir" ]] && die "Usage: record-window.sh session-compose <output-dir> [--scenario \"name\"]"
+    [[ ! -d "$output_dir" ]] && die "Output directory not found: $output_dir"
+
+    local action_log="${output_dir}/action-log.jsonl"
+    [[ ! -f "$action_log" ]] && die "Action log not found: $action_log"
+
+    echo ""
+    echo "--- Composing multi-persona video ---"
+
+    local scenario_arg=""
+    if [[ "${3:-}" == "--scenario" && -n "${4:-}" ]]; then
+        scenario_arg="--scenario ${4}"
+    fi
+
+    # Run the TypeScript compose-session entry point
+    node --loader ts-node/esm "${SCRIPT_DIR}/../lib/compose-session.ts" "$output_dir" $scenario_arg
+
+    echo ""
+    echo "=== Composition complete ==="
+}
+
 # End a recording session — assemble screenshots into video and mux with narration.
 cmd_session_end() {
     local output_dir="${2:-}"
@@ -1850,22 +1875,8 @@ cmd_session_end() {
         echo "=== Final video: ${final_output} ==="
     else
         echo ""
-        echo "Multiple personas detected. Per-persona videos assembled."
-        echo "For multi-persona composition, use the TypeScript SceneComposer:"
-        echo "  1. Each persona video: ${output_dir}/<persona>-assembled.mp4"
-        echo "  2. Audio: ${output_dir}/audio/"
-        echo "  3. Action log: ${action_log}"
-        echo ""
-
-        # If there's a simple two-persona case, try muxing the first one as a default
-        local first_video="${assembled_videos[0]}"
-        local final_output="${output_dir}/final.mp4"
-        echo "--- Muxing first persona video as default ---"
-        cmd_mux mux "$output_dir" "$first_video" "$final_output"
-
-        echo ""
-        echo "=== Default video: ${final_output} ==="
-        echo "(For full composition with layouts, use SceneComposer)"
+        echo "Multiple personas detected. Running scene composition..."
+        cmd_session_compose session-compose "$output_dir"
     fi
 
     # Step 5: Update session state
@@ -1903,6 +1914,7 @@ case "$COMMAND" in
     session-narrate) cmd_session_narrate "$@" ;;
     session-scene)   cmd_session_scene "$@" ;;
     session-end)     cmd_session_end "$@" ;;
+    session-compose) cmd_session_compose "$@" ;;
     *)
         echo "Usage: record-window.sh <command>"
         echo ""

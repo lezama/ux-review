@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "chrome-devtools-2": {
+      "command": "npx",
+      "args": [
+        "chrome-devtools-mcp@latest",
+        "--isolated",
+        "--channel",
+        "beta",
+        "--chromeArg=--start-fullscreen"
+      ]
+    },
+    "chrome-devtools-3": {
+      "command": "npx",
+      "args": [
+        "chrome-devtools-mcp@latest",
+        "--isolated",
+        "--channel",
+        "beta",
+        "--chromeArg=--start-fullscreen"
+      ]
+    }
+  }
+}
