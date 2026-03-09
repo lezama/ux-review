@@ -15,9 +15,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ActionLog } from './action-log.js';
-import type { SceneSegment } from './action-log.js';
+import type { ActionEntry, SceneSegment } from './action-log.js';
 import { assembleFrames } from './frame-assembler.js';
-import { isDualPersonaLayout } from './ffmpeg-utils.js';
+import { concatenateAudio, generateSilence, getFileDuration, isDualPersonaLayout } from './ffmpeg-utils.js';
 import { SceneComposer } from './scene-composer.js';
 import { generateFindings } from './report-generator.js';
 
@@ -43,7 +43,7 @@ export function composeSession( options: ComposeSessionOptions ): ComposeResult 
 		outputDir,
 		scenarioName,
 		transitionSec = 0.5,
-		skipSubtitles = false,
+		skipSubtitles = true,
 	} = options;
 
 	const actionLog = ActionLog.loadFromDirectory( outputDir );
@@ -55,6 +55,26 @@ export function composeSession( options: ComposeSessionOptions ): ComposeResult 
 			'No scene markers found in action log. Use session-scene to mark scenes during recording.'
 		);
 	}
+
+	// Enrich scenes with narration text from narration entries
+	const allEntries = actionLog.getEntries();
+	const narrationEntries = allEntries.filter( ( e ) => e.action === 'narration' );
+
+	for ( const scene of scenes ) {
+		const sceneEnd = scene.endMs ?? Infinity;
+		const sceneNarrations = narrationEntries.filter(
+			( n ) => n.timestampMs >= scene.startMs && n.timestampMs < sceneEnd
+		);
+		if ( sceneNarrations.length > 0 && ! scene.narration ) {
+			scene.narration = sceneNarrations
+				.map( ( n ) => n.narration )
+				.filter( Boolean )
+				.join( ' ' );
+		}
+	}
+
+	// Build narration audio from pre-generated files, timed to match video frames
+	const audioPath = buildAudioFromActionLog( allEntries, segments, outputDir );
 
 	const personas = [ ...new Set( segments.map( ( s ) => s.speaker ).filter( Boolean ) ) ] as string[];
 	// eslint-disable-next-line no-console
@@ -80,6 +100,7 @@ export function composeSession( options: ComposeSessionOptions ): ComposeResult 
 			outputPath: finalPath,
 			transitionSec,
 			skipSubtitles,
+			audioPath: audioPath ?? undefined,
 		} );
 
 		// eslint-disable-next-line no-console
@@ -198,6 +219,103 @@ function buildSceneSegment(
 	}
 
 	return outputPath;
+}
+
+/**
+ * Build a narration audio track aligned to video frame timing.
+ *
+ * The video duration is determined by segment frame durations (not wall-clock
+ * timestamps). This function derives audio timing from the same source:
+ *
+ *   1. Map each screenshot file → its narration audio file (from the action log)
+ *   2. Walk segment frames in order (same order as the video)
+ *   3. For narrated frames: insert the audio clip + pad to frame duration
+ *   4. For silent frames: insert silence matching the frame duration
+ *
+ * This guarantees audio length == video length with narrations synced to
+ * their corresponding frames.
+ */
+function buildAudioFromActionLog(
+	allEntries: ActionEntry[],
+	segments: SceneSegment[],
+	outputDir: string
+): string | null {
+	// Build map: screenshot absolute path → narration audio file path
+	// A narration entry is always logged just before its associated screenshot
+	const screenshotDir = path.join( outputDir, 'screenshots' );
+	const frameToAudio = new Map< string, string >();
+
+	for ( let i = 0; i < allEntries.length; i++ ) {
+		const entry = allEntries[ i ];
+		if ( entry.action !== 'narration' || ! entry.audioFile ) {
+			continue;
+		}
+		// Look ahead for the next screenshot from the same persona
+		for ( let j = i + 1; j < allEntries.length && j <= i + 5; j++ ) {
+			const next = allEntries[ j ];
+			if ( next.action === 'screenshot' && next.screenshotFile && next.persona === entry.persona ) {
+				const absPath = path.join( screenshotDir, next.screenshotFile );
+				frameToAudio.set( absPath, entry.audioFile );
+				break;
+			}
+		}
+	}
+
+	if ( frameToAudio.size === 0 ) {
+		return null;
+	}
+
+	const tmpDir = path.join( outputDir, '.audio-tmp' );
+	fs.mkdirSync( tmpDir, { recursive: true } );
+
+	try {
+		const segmentFiles: string[] = [];
+		let silIdx = 0;
+
+		for ( const segment of segments ) {
+			for ( const frame of segment.primaryFrames ) {
+				const audioFile = frameToAudio.get( frame.file );
+
+				if ( audioFile ) {
+					const resolved = path.isAbsolute( audioFile )
+						? audioFile
+						: path.join( outputDir, audioFile );
+
+					if ( fs.existsSync( resolved ) ) {
+						segmentFiles.push( resolved );
+
+						// Pad if frame duration > audio duration
+						const audioDurSec = getFileDuration( resolved );
+						const frameDurSec = frame.durationMs / 1000;
+						const gap = frameDurSec - audioDurSec;
+						if ( gap > 0.1 ) {
+							const silPath = path.join( tmpDir, `sil-${ silIdx++ }.aiff` );
+							generateSilence( silPath, gap );
+							segmentFiles.push( silPath );
+						}
+						continue;
+					}
+				}
+
+				// No narration for this frame — fill with silence
+				if ( frame.durationMs > 100 ) {
+					const silPath = path.join( tmpDir, `sil-${ silIdx++ }.aiff` );
+					generateSilence( silPath, frame.durationMs / 1000 );
+					segmentFiles.push( silPath );
+				}
+			}
+		}
+
+		if ( segmentFiles.length === 0 ) {
+			return null;
+		}
+
+		const outputPath = path.join( tmpDir, 'narration.m4a' );
+		concatenateAudio( segmentFiles, outputPath );
+		return outputPath;
+	} catch {
+		return null;
+	}
 }
 
 function capitalize( s: string ): string {

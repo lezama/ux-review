@@ -97,52 +97,61 @@ export function isDualPersonaLayout( layout: string ): boolean {
 	return layout === 'split' || layout.startsWith( 'pip-' );
 }
 
+/** Path to TTS wrapper scripts. */
+const BIN_DIR = new URL( '../bin/', import.meta.url ).pathname;
+const QWEN_SCRIPT = BIN_DIR + 'qwen-say.py';
+const KOKORO_SCRIPT = BIN_DIR + 'kokoro-say.py';
+
+type TTSEngine = 'qwen' | 'kokoro' | 'say';
+
 /**
- * Map of macOS `say` voice names to Kokoro voice IDs.
+ * Detect which TTS engine to use.
+ * Priority: TTS_ENGINE env var > qwen (if available) > kokoro > say
  */
-const KOKORO_VOICE_MAP: Record< string, string > = {
-	samantha: 'af_sarah',
-	daniel: 'bm_daniel',
-	karen: 'bf_emma',
-	tom: 'am_adam',
-	alex: 'am_michael',
-	victoria: 'af_nicole',
-	fiona: 'bf_emma',
-	moira: 'bf_emma',
-};
-
-/** Path to the kokoro-say.py wrapper script. */
-const KOKORO_SCRIPT = new URL( '../bin/kokoro-say.py', import.meta.url ).pathname;
-
-/** Whether to use Kokoro TTS. Set TTS_ENGINE=say to force macOS say. */
-function useKokoro(): boolean {
-	if ( process.env.TTS_ENGINE === 'say' ) {
-		return false;
+function detectTTSEngine(): TTSEngine {
+	const env = process.env.TTS_ENGINE;
+	if ( env === 'say' || env === 'kokoro' || env === 'qwen' ) {
+		return env;
 	}
-	if ( process.env.TTS_ENGINE === 'kokoro' ) {
-		return true;
-	}
-	// Auto-detect: use Kokoro if the script exists and python3.11 is available
 	try {
-		if ( fs.existsSync( KOKORO_SCRIPT ) ) {
-			execSync( 'python3.11 --version', { stdio: 'ignore' } );
-			return true;
+		if ( fs.existsSync( QWEN_SCRIPT ) ) {
+			execSync( 'python3.11 -c "import qwen_tts"', { stdio: 'ignore' } );
+			return 'qwen';
 		}
 	} catch {
 		// fall through
 	}
-	return false;
+	try {
+		if ( fs.existsSync( KOKORO_SCRIPT ) ) {
+			execSync( 'python3.11 -c "import kokoro"', { stdio: 'ignore' } );
+			return 'kokoro';
+		}
+	} catch {
+		// fall through
+	}
+	return 'say';
 }
 
 /**
- * Generate speech audio from text using Kokoro TTS or macOS `say`.
+ * Generate speech audio from text.
+ *
+ * Engine priority: Qwen3-TTS > Kokoro > macOS say.
+ * Override with TTS_ENGINE env var (qwen | kokoro | say).
  *
  * @param text - Text to speak
  * @param outputPath - Output audio file path (.aiff, .wav, or .mp3)
- * @param voice - Voice name (macOS say name or Kokoro voice ID)
+ * @param voice - Voice name (macOS say name — auto-mapped per engine)
  */
 export function generateSpeech( text: string, outputPath: string, voice?: string ): void {
-	if ( useKokoro() ) {
+	const engine = detectTTSEngine();
+
+	if ( engine === 'qwen' ) {
+		const voiceArg = voice ? `-v ${ JSON.stringify( voice ) }` : '';
+		execSync(
+			`python3.11 ${ JSON.stringify( QWEN_SCRIPT ) } ${ voiceArg } -o ${ JSON.stringify( outputPath ) } ${ JSON.stringify( text ) }`,
+			{ stdio: [ 'ignore', 'pipe', 'ignore' ], timeout: 60_000 }
+		);
+	} else if ( engine === 'kokoro' ) {
 		const voiceArg = voice ? `-v ${ JSON.stringify( voice ) }` : '';
 		execSync(
 			`python3.11 ${ JSON.stringify( KOKORO_SCRIPT ) } ${ voiceArg } -o ${ JSON.stringify( outputPath ) } ${ JSON.stringify( text ) }`,

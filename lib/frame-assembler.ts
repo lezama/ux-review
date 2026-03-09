@@ -3,7 +3,7 @@
  *
  * For headless Chrome recordings where screencapture isn't available.
  * Takes an array of PNG frames with durations and assembles them into
- * an MP4 using ffmpeg's concat demuxer.
+ * an MP4 using per-image loop inputs and the concat filter.
  */
 import { execSync } from 'child_process';
 import * as fs from 'fs';
@@ -29,37 +29,11 @@ export interface AssembleOptions {
 }
 
 /**
- * Write an ffmpeg concat demuxer file from frames.
- *
- * Format:
- *   file '/abs/path/to/frame.png'
- *   duration 1.500
- *   file '/abs/path/to/frame.png'   <-- last frame repeated without duration
- */
-export function writeConcatFile(
-	frames: FrameInput[],
-	concatPath: string
-): void {
-	const lines: string[] = [];
-	for ( const frame of frames ) {
-		const absPath = path.resolve( frame.file );
-		lines.push( `file '${ absPath }'` );
-		lines.push( `duration ${ ( frame.durationMs / 1000 ).toFixed( 3 ) }` );
-	}
-	// ffmpeg concat demuxer needs the last file repeated without duration
-	if ( frames.length > 0 ) {
-		lines.push(
-			`file '${ path.resolve( frames[ frames.length - 1 ].file ) }'`
-		);
-	}
-	fs.writeFileSync( concatPath, lines.join( '\n' ) );
-}
-
-/**
  * Assemble PNG frames into an MP4 video.
  *
- * Each frame is held for its specified duration, creating a slideshow-style
- * video. Output is scaled and padded to a consistent resolution.
+ * Each frame is looped for its specified duration, then all are joined
+ * with the concat filter. This avoids the concat demuxer's timebase
+ * issues that cause incorrect durations with `-r` output.
  */
 export function assembleFrames( options: AssembleOptions ): string {
 	const { frames, outputPath, fps = 30, label } = options;
@@ -71,24 +45,50 @@ export function assembleFrames( options: AssembleOptions ): string {
 	const dir = path.dirname( outputPath );
 	fs.mkdirSync( dir, { recursive: true } );
 
-	const concatFile = path.join(
-		dir,
-		`.concat-${ path.basename( outputPath, '.mp4' ) }.txt`
-	);
-
-	writeConcatFile( frames, concatFile );
-
 	const labelStyle =
 		"fontsize=32:fontcolor=white:borderw=2:bordercolor=black:font='Helvetica'";
 	const labelFilter = label
 		? `,drawtext=text='${ label }':${ labelStyle }:x=40:y=40`
 		: '';
 
+	// Build per-frame inputs: -loop 1 -t <duration> -i <file>
+	const inputs = frames.map( ( frame ) => {
+		const absPath = path.resolve( frame.file );
+		const durSec = ( frame.durationMs / 1000 ).toFixed( 3 );
+		return `-loop 1 -t ${ durSec } -i ${ JSON.stringify( absPath ) }`;
+	} ).join( ' ' );
+
+	// Build concat filter: scale each input, then concat
+	const filterParts: string[] = [];
+	const concatInputs: string[] = [];
+
+	for ( let i = 0; i < frames.length; i++ ) {
+		filterParts.push(
+			`[${ i }:v]${ SCALE_PAD_FILTER },format=yuv420p[v${ i }]`
+		);
+		concatInputs.push( `[v${ i }]` );
+	}
+
+	filterParts.push(
+		`${ concatInputs.join( '' ) }concat=n=${ frames.length }:v=1:a=0[vraw]`
+	);
+
+	// Apply label if present
+	if ( label ) {
+		filterParts.push(
+			`[vraw]drawtext=text='${ label }':${ labelStyle }:x=40:y=40[vout]`
+		);
+	} else {
+		// Rename for consistent output label
+		filterParts.push( '[vraw]null[vout]' );
+	}
+
+	const filterComplex = filterParts.join( '; ' );
+
 	const cmd = [
-		'ffmpeg -y',
-		'-f concat -safe 0',
-		`-i ${ JSON.stringify( concatFile ) }`,
-		`-vf "${ SCALE_PAD_FILTER }${ labelFilter },format=yuv420p"`,
+		`ffmpeg -y ${ inputs }`,
+		`-filter_complex "${ filterComplex }"`,
+		'-map "[vout]"',
 		ENCODE_PRESET,
 		`-r ${ fps }`,
 		'-an',
@@ -96,13 +96,6 @@ export function assembleFrames( options: AssembleOptions ): string {
 	].join( ' ' );
 
 	execSync( cmd, { stdio: 'pipe', timeout: 300_000 } );
-
-	// Clean up concat file
-	try {
-		fs.unlinkSync( concatFile );
-	} catch {
-		// ignore
-	}
 
 	return outputPath;
 }

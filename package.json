@@ -7,10 +7,14 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "compose": "node --loader ts-node/esm lib/compose-session.ts"
+    "compose": "node --loader ts-node/esm lib/compose-session.ts",
+    "mcp-server": "node dist/mcp-server/index.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1"
   }
 }

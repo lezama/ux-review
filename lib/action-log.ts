@@ -137,7 +137,7 @@ export class ActionLog {
 			const nextScene = sceneEntries[ i + 1 ];
 			const sceneEndMs = nextScene
 				? nextScene.timestampMs
-				: lastTimestamp;
+				: Infinity;
 
 			const layout = sceneEntry.layout ?? 'full';
 
@@ -212,7 +212,7 @@ export class ActionLog {
 
 		return sceneEntries.map( ( entry, i ) => {
 			const nextScene = sceneEntries[ i + 1 ];
-			const endMs = nextScene ? nextScene.timestampMs : lastTimestamp;
+			const endMs = nextScene ? nextScene.timestampMs : Infinity;
 
 			return {
 				name: entry.target ?? `scene-${ i }`,

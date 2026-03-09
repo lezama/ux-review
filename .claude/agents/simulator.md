@@ -38,33 +38,39 @@ evaluate_script(() => {
 
 #### Recording Loop
 
-Use **`session-step`** for ALL recording operations. It combines scene + narrate + capture into ONE bash call (one permission prompt instead of 3-4).
+Use **`ux_session_step`** (MCP tool) for ALL recording operations. It combines scene + narrate + capture into ONE call with NO permission prompts.
 
-```bash
+```
 # Initialize session
-bin/record-window.sh session-start <output-dir> --personas admin,buyer
+ux_session_start({ outputDir: "<output-dir>", personas: ["admin", "buyer"] })
 
 # Scene + narrate + capture — ONE call
-bin/record-window.sh session-step <dir> \
-  --scene "login" --layout full --speaker admin \
-  --narrate "I see the login page." --voice Samantha \
-  --capture admin /path/to/screenshot.png
+ux_session_step({
+  outputDir: "<dir>", scene: "login", layout: "full", speaker: "admin",
+  narrate: "I see the login page.", voice: "Samantha",
+  capture: { persona: "admin", file: "/path/to/screenshot.png" }
+})
 
 # Just capture (no narration)
-bin/record-window.sh session-step <dir> --capture admin /path/to/screenshot.png
+ux_session_step({
+  outputDir: "<dir>",
+  capture: { persona: "admin", file: "/path/to/screenshot.png" }
+})
 
 # Narrate + capture
-bin/record-window.sh session-step <dir> \
-  --narrate "Dashboard loaded. Clean layout." --voice Samantha \
-  --capture admin /path/to/screenshot.png
+ux_session_step({
+  outputDir: "<dir>",
+  narrate: "Dashboard loaded. Clean layout.", voice: "Samantha",
+  capture: { persona: "admin", file: "/path/to/screenshot.png" }
+})
 ```
 
 **The rhythm:**
 1. Take screenshot (MCP)
-2. `session-step` with --scene + --narrate + --capture (ONE bash call)
+2. `ux_session_step` with scene + narrate + capture (ONE MCP call, no prompts)
 3. Act in browser (MCP: click, fill, navigate)
 4. Take screenshot (MCP)
-5. `session-step` with --narrate + --capture (ONE bash call)
+5. `ux_session_step` with narrate + capture (ONE MCP call, no prompts)
 6. Repeat from step 3
 
 **CRITICAL PACING RULES:**
@@ -83,24 +89,17 @@ bin/record-window.sh session-step <dir> \
 
 After all steps are complete:
 
-```bash
-bin/record-window.sh session-end <output-dir>
+```
+ux_session_end({ outputDir: "<output-dir>", scenarioName: "Gift Card Lifecycle" })
 ```
 
 This handles everything automatically:
-1. Assembles per-persona videos from screenshots
-2. **Single persona**: Muxes narration audio → `final.mp4`
-3. **Multi-persona**: Calls `session-compose` which runs `compose-session.ts`:
-   - Reads scene markers from the action log
-   - Builds per-scene segment MP4s from screenshots (via frame-assembler)
-   - Composites segments with layouts (full/split/PIP) and xfade transitions
-   - Generates narration audio and SRT subtitles
-   - Outputs `composed-final.mp4`
-
-You can also run composition manually:
-```bash
-bin/record-window.sh session-compose <output-dir> --scenario "Gift Card Lifecycle"
-```
+1. Finalizes the session and writes the manifest
+2. Assembles per-persona videos from screenshots
+3. Composites segments with layouts (full/split/PIP) and xfade transitions
+4. Generates narration audio and SRT subtitles
+5. Outputs `composed-final.mp4`
+6. Produces `findings.md` with UX observations
 
 ### Phase 4: Report
 
@@ -170,15 +169,16 @@ When spawned as a team agent, communicate via SendMessage:
 
 ## Tools
 
+- UX Recording MCP (`ux_session_start`, `ux_session_step`, `ux_session_end`): Recording lifecycle — no permission prompts
 - Chrome DevTools MCP (`mcp__chrome-devtools-*__*`): Browser automation + screenshots
-- Bash: Running `record-window.sh`, ffmpeg commands
 - Read/Write/Edit: Managing action logs, config files
 - SendMessage: Communicating with calling agent
 
 ## Important Notes
 
 - **Screenshot-first**: Always use screenshot-based recording
-- **Verify every capture**: Check file exists and is >1KB
+- **Verify every capture**: session-step checks file exists and is >1KB automatically
+- **See the page like a user**: Take screenshots and Read them to see what's on screen. Never use `evaluate_script` to inspect HTML for narration or navigation decisions — a real user tester looks at the screen, not the source code.
 - **The action log is the source of truth** for scene composition timing
 - Use `--viewport 1280x800` for consistent dimensions (set at Chrome launch)
 - Check for console errors after each navigation

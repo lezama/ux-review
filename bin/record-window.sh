@@ -1684,17 +1684,32 @@ cmd_session_narrate() {
 
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local qwen_script="${script_dir}/qwen-say.py"
     local kokoro_script="${script_dir}/kokoro-say.py"
     local tts_engine="${TTS_ENGINE:-auto}"
 
-    if [[ "$tts_engine" == "kokoro" ]] || { [[ "$tts_engine" == "auto" ]] && [[ -f "$kokoro_script" ]] && command -v python3.11 &>/dev/null; }; then
-        local kokoro_output
-        kokoro_output=$(python3.11 "$kokoro_script" -v "$voice" -o "$aiff_path" "$text" 2>/dev/null)
-        local duration
-        duration="${kokoro_output:-0}"
+    # Auto-detect: qwen > kokoro > say
+    if [[ "$tts_engine" == "auto" ]]; then
+        if [[ -f "$qwen_script" ]] && python3.11 -c "import qwen_tts" &>/dev/null; then
+            tts_engine="qwen"
+        elif [[ -f "$kokoro_script" ]] && command -v python3.11 &>/dev/null; then
+            tts_engine="kokoro"
+        else
+            tts_engine="say"
+        fi
+    fi
+
+    local duration
+    if [[ "$tts_engine" == "qwen" ]]; then
+        local tts_output
+        tts_output=$(python3.11 "$qwen_script" -v "$voice" -o "$aiff_path" "$text" 2>/dev/null)
+        duration="${tts_output:-0}"
+    elif [[ "$tts_engine" == "kokoro" ]]; then
+        local tts_output
+        tts_output=$(python3.11 "$kokoro_script" -v "$voice" -o "$aiff_path" "$text" 2>/dev/null)
+        duration="${tts_output:-0}"
     else
         say -v "$voice" -o "$aiff_path" "$text"
-        local duration
         duration=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$aiff_path" 2>/dev/null)
     fi
 

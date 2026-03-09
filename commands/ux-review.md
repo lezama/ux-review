@@ -101,37 +101,58 @@ Present the plan briefly, then **proceed immediately** — do not ask for confir
 
 ### Setup
 
-Set up environment in ONE bash call:
+Initialize the recording session with `ux_session_start`. Choose an output directory and list the personas:
 
-```bash
-UX_SIM_DIR="$(find ~/dev -maxdepth 4 -name 'record-window.sh' -path '*/ux-simulator/bin/*' 2>/dev/null | head -1 | xargs dirname | xargs dirname)" && OUTPUT_DIR="/tmp/ux-review-$(date +%s)" && RW="$UX_SIM_DIR/bin/record-window.sh" && [[ -f "$UX_SIM_DIR/dist/lib/ffmpeg-utils.js" ]] || (cd "$UX_SIM_DIR" && npm run build) && "$RW" session-start "$OUTPUT_DIR" --personas [persona1],[persona2] && echo "RW=$RW" && echo "OUTPUT_DIR=$OUTPUT_DIR"
+```
+ux_session_start({
+  outputDir: "/tmp/ux-review-<timestamp>",
+  personas: ["admin", "buyer"]
+})
 ```
 
-### The `session-step` Command
+This creates the output directory, screenshot folders, and initializes the recorder. No bash scripts needed — the MCP server handles everything.
 
-**Use `session-step` for ALL recording operations.** It combines scene + narrate + capture into a SINGLE bash call, so users only see ONE permission prompt per step instead of 3-4.
+### The `ux_session_step` Tool
 
-```bash
-"$RW" session-step "$OUTPUT_DIR" \
-  --scene "login" --layout full --speaker admin \
-  --narrate "I see the login page." --voice Samantha \
-  --capture admin /path/to/screenshot.png
+**Use `ux_session_step` for ALL recording operations.** It combines scene + narrate + capture into a SINGLE MCP tool call with NO permission prompts:
+
+```
+ux_session_step({
+  outputDir: "/tmp/ux-review-XXXXX",
+  scene: "login",
+  layout: "full",
+  speaker: "admin",
+  narrate: "I see the login page.",
+  voice: "Samantha",
+  capture: { persona: "admin", file: "/path/to/screenshot.png" }
+})
 ```
 
-All flags are optional — use only what you need:
+All fields are optional except `outputDir` — use only what you need:
 
-```bash
-# Just capture a screenshot (no narration)
-"$RW" session-step "$OUTPUT_DIR" --capture admin /path/to/screenshot.png
+```
+// Just capture a screenshot (no narration)
+ux_session_step({
+  outputDir: "/tmp/ux-review-XXXXX",
+  capture: { persona: "admin", file: "/path/to/screenshot.png" }
+})
 
-# Narrate + capture
-"$RW" session-step "$OUTPUT_DIR" --narrate "Clean layout." --voice Samantha --capture admin /path/to/shot.png
+// Narrate + capture
+ux_session_step({
+  outputDir: "/tmp/ux-review-XXXXX",
+  narrate: "Clean layout.",
+  voice: "Samantha",
+  capture: { persona: "admin", file: "/path/to/shot.png" }
+})
 
-# New scene + narrate + capture
-"$RW" session-step "$OUTPUT_DIR" --scene "checkout" --speaker admin --narrate "Moving to checkout." --capture admin /path/to/shot.png
-
-# Multiple captures in one call
-"$RW" session-step "$OUTPUT_DIR" --capture admin /path/to/shot1.png --capture admin /path/to/shot2.png
+// New scene + narrate + capture
+ux_session_step({
+  outputDir: "/tmp/ux-review-XXXXX",
+  scene: "checkout",
+  speaker: "admin",
+  narrate: "Moving to checkout.",
+  capture: { persona: "admin", file: "/path/to/shot.png" }
+})
 ```
 
 ### Recording Loop
@@ -141,18 +162,19 @@ For each task, follow the **observe-act-observe** rhythm. **Narrations must be S
 **The rhythm:**
 
 1. **Take screenshot** (MCP: `take_screenshot`)
-2. **Step with scene + narrate + capture** (ONE bash call):
-   ```bash
-   "$RW" session-step "$OUTPUT_DIR" --scene "task-name" --layout full --speaker admin \
-     --narrate "I see the login page." --voice Samantha \
-     --capture admin /path/to/screenshot.png
+2. **Step with scene + narrate + capture**:
+   ```
+   ux_session_step({ outputDir, scene: "task-name", layout: "full", speaker: "admin",
+     narrate: "I see the login page.", voice: "Samantha",
+     capture: { persona: "admin", file: "/path/to/screenshot.png" } })
    ```
 3. **Act** in browser (MCP: click, fill, navigate)
 4. **Take screenshot** (MCP)
-5. **Step with narrate + capture** (ONE bash call):
-   ```bash
-   "$RW" session-step "$OUTPUT_DIR" --narrate "Logged in. Dashboard looks clean." --voice Samantha \
-     --capture admin /path/to/screenshot.png
+5. **Step with narrate + capture**:
+   ```
+   ux_session_step({ outputDir,
+     narrate: "Logged in. Dashboard looks clean.", voice: "Samantha",
+     capture: { persona: "admin", file: "/path/to/screenshot.png" } })
    ```
 6. **Act** → **screenshot** → **step** → repeat
 
@@ -164,19 +186,25 @@ For each task, follow the **observe-act-observe** rhythm. **Narrations must be S
 
 **Bad** (monologue — NEVER do this):
 ```
---narrate "Here's the gift card page. The header says Gift cards with a subtitle. I can see a table with columns for Name, Status, Balance. There's a Create button..."
+narrate: "Here's the gift card page. The header says Gift cards with a subtitle. I can see a table with columns for Name, Status, Balance. There's a Create button..."
 ```
 That's 30+ seconds over ONE frozen frame. Unwatchable.
 
 **Good** (short bursts):
 ```
-take_screenshot → session-step --narrate "I'm on the gift cards page. Clean layout." --capture admin shot1.png
+take_screenshot → ux_session_step({ narrate: "I'm on the gift cards page. Clean layout.", capture: { persona: "admin", file: "shot1.png" } })
 click "Create"
-take_screenshot → session-step --narrate "Creation form opened." --capture admin shot2.png
+take_screenshot → ux_session_step({ narrate: "Creation form opened.", capture: { persona: "admin", file: "shot2.png" } })
 fill name
-take_screenshot → session-step --capture admin shot3.png
-session-step --narrate "Nice, auto-generated a code." --capture admin shot4.png
+take_screenshot → ux_session_step({ capture: { persona: "admin", file: "shot3.png" } })
+ux_session_step({ narrate: "Nice, auto-generated a code.", capture: { persona: "admin", file: "shot4.png" } })
 ```
+
+### See the Page Like a User
+
+**Use `take_screenshot` to see the page, then Read the screenshot to understand what's visible.** This is how a real user tester works — they look at the screen, not the source code. Never use `evaluate_script` to inspect HTML/DOM for deciding what to narrate or where to click. Base all observations and decisions on what you can **see** in the screenshots.
+
+The first time you Read a screenshot, select **"Yes, allow reading from screenshots/ during this session"** to avoid repeated prompts.
 
 ### Browser Preparation
 
@@ -220,8 +248,11 @@ Use different voices per persona:
 
 After all tasks are complete:
 
-```bash
-"$UX_SIM_DIR/bin/record-window.sh" session-end "$OUTPUT_DIR"
+```
+ux_session_end({
+  outputDir: "/tmp/ux-review-XXXXX",
+  scenarioName: "Feature Name UX Review"
+})
 ```
 
 This automatically:

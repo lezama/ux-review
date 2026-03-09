@@ -60,6 +60,8 @@ export class SceneComposer {
 		outputPath: string;
 		transitionSec?: number;
 		skipSubtitles?: boolean;
+		/** Pre-built narration audio file. If provided, skips internal TTS generation. */
+		audioPath?: string;
 	} ): string {
 		SceneComposer.assertDependencies();
 
@@ -69,6 +71,7 @@ export class SceneComposer {
 			outputPath,
 			transitionSec = 0.5,
 			skipSubtitles = false,
+			audioPath: prebuiltAudio,
 		} = options;
 
 		if ( scenePaths.length === 0 ) {
@@ -90,7 +93,9 @@ export class SceneComposer {
 		fs.mkdirSync( tmpDir, { recursive: true } );
 
 		try {
-			const audioPath = generateSceneAudio( scenes, tmpDir );
+			const audioPath = prebuiltAudio && fs.existsSync( prebuiltAudio )
+				? prebuiltAudio
+				: generateSceneAudio( scenes, tmpDir );
 
 			const srtPath = skipSubtitles
 				? null

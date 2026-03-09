@@ -13,7 +13,10 @@
       "Bash(python3.11 */kokoro-say.py *)",
       "Bash(ls *ux-review*)",
       "Bash(cat *ux-review*)",
-      "Bash(find ~/dev*ux-simulator*)"
+      "Bash(find ~/dev*ux-simulator*)",
+      "mcp__ux-recording__*",
+      "mcp__chrome-devtools-2__*",
+      "mcp__chrome-devtools-3__*"
     ]
   }
 }

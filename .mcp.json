@@ -1,5 +1,10 @@
 {
   "mcpServers": {
+    "ux-recording": {
+      "command": "node",
+      "args": ["dist/mcp-server/index.js"],
+      "cwd": "/Users/miguel/dev/a8c/ux-simulator"
+    },
     "chrome-devtools-2": {
       "command": "npx",
       "args": [
