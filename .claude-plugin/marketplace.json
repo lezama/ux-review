@@ -1,0 +1,17 @@
+{
+  "name": "ux-review-marketplace",
+  "owner": {
+    "name": "Miguel Lezama",
+    "url": "https://github.com/mlezama"
+  },
+  "metadata": {
+    "description": "UX Review plugin marketplace"
+  },
+  "plugins": [
+    {
+      "name": "ux-review",
+      "description": "AI-driven UX review agent. Interviews you to build a test script, drives browsers to record the user experience, and produces a video with narration and findings.",
+      "source": "./"
+    }
+  ]
+}
