@@ -33,6 +33,33 @@ die() {
     exit 1
 }
 
+# Get current epoch in milliseconds.
+_epoch_ms() {
+    perl -MTime::HiRes -e 'printf "%d\n", Time::HiRes::time()*1000'
+}
+
+# Read one or more fields from a JSON file. Returns space-separated values.
+# Usage: _json_read <file> <key1> [key2...]
+_json_read() {
+    local file="$1"; shift
+    python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k in sys.argv[2:]:
+    print(d[k])
+" "$file" "$@"
+}
+
+# JSON-escape a string for safe interpolation into JSONL.
+_json_escape() {
+    python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$1"
+}
+
+# Read the first persona name from the session state file.
+_session_first_persona() {
+    python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['personas'][0])" "$1"
+}
+
 # Atomically update a key in the config file.
 # Removes ALL existing lines for the key and appends the new value.
 # This prevents duplicate lines that cause `source` to read stale state.
@@ -1480,15 +1507,23 @@ cmd_session_start() {
     done
     personas_json+="]"
 
+    local start_ms
+    start_ms=$(_epoch_ms)
+
     cat > "$state_file" <<STATEOF
 {
     "startTime": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-    "startEpochMs": $(python3 -c "import time; print(int(time.time()*1000))"),
+    "startEpochMs": ${start_ms},
     "outputDir": "${output_dir}",
     "personas": ${personas_json},
     "status": "recording"
 }
 STATEOF
+
+    # Initialize per-persona frame counters (O(1) lookups instead of grep -c)
+    for p in "${persona_arr[@]}"; do
+        echo "0" > "${output_dir}/.frame-count-${p}"
+    done
 
     # Preflight checks
     local checks_passed=true
@@ -1574,16 +1609,15 @@ cmd_session_capture() {
 
     # Compute timestamp relative to session start
     local start_epoch_ms
-    start_epoch_ms=$(python3 -c "import json; print(json.load(open('${state_file}'))['startEpochMs'])")
+    start_epoch_ms=$(_json_read "$state_file" startEpochMs)
     local now_ms
-    now_ms=$(python3 -c "import time; print(int(time.time()*1000))")
+    now_ms=$(_epoch_ms)
     local timestamp_ms=$(( now_ms - start_epoch_ms ))
 
-    # Compute frame number from action log entries for this persona
-    # (counts previously logged screenshots — the current file hasn't been logged yet)
-    local frame_count
-    frame_count=$(grep -c "\"persona\": \"${persona}\", \"action\": \"screenshot\"" "${output_dir}/action-log.jsonl" 2>/dev/null || true)
-    frame_count=${frame_count:-0}
+    # Read frame counter (O(1) — no grep scan)
+    local counter_file="${output_dir}/.frame-count-${persona}"
+    local frame_count=0
+    [[ -f "$counter_file" ]] && frame_count=$(cat "$counter_file")
 
     # Compute relative path from screenshots dir
     local screenshots_dir="${output_dir}/screenshots"
@@ -1599,12 +1633,17 @@ cmd_session_capture() {
         fi
     fi
 
-    # Build action log entry
-    local duration_field=""
+    # Build action log entry — JSON-escape variable values
+    local persona_json rel_json duration_field=""
+    persona_json=$(_json_escape "$persona")
+    rel_json=$(_json_escape "$rel_path")
     [[ -n "$duration_ms" ]] && duration_field=", \"durationMs\": ${duration_ms}"
 
-    echo "{\"frame\": ${frame_count}, \"timestampMs\": ${timestamp_ms}, \"persona\": \"${persona}\", \"action\": \"screenshot\", \"screenshotFile\": \"${rel_path}\"${duration_field}}" \
+    echo "{\"frame\": ${frame_count}, \"timestampMs\": ${timestamp_ms}, \"persona\": ${persona_json}, \"action\": \"screenshot\", \"screenshotFile\": ${rel_json}${duration_field}}" \
         >> "${output_dir}/action-log.jsonl"
+
+    # Increment frame counter
+    echo "$(( frame_count + 1 ))" > "$counter_file"
 
     echo "VERIFIED=true"
     echo "FRAME=${frame_count}"
@@ -1649,25 +1688,27 @@ cmd_session_narrate() {
     duration=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$aiff_path" 2>/dev/null)
 
     local duration_ms
-    duration_ms=$(python3 -c "print(int(float('${duration}') * 1000))")
+    duration_ms=$(awk "BEGIN {printf \"%d\", ${duration} * 1000}")
 
     # Resolve persona — use first persona from session if not specified
     [[ -z "$persona" ]] && \
-        persona=$(python3 -c "import json; print(json.load(open('${state_file}'))['personas'][0])")
+        persona=$(_session_first_persona "$state_file")
 
     # Compute timestamp relative to session start
     local start_epoch_ms
-    start_epoch_ms=$(python3 -c "import json; print(json.load(open('${state_file}'))['startEpochMs'])")
+    start_epoch_ms=$(_json_read "$state_file" startEpochMs)
     local now_ms
-    now_ms=$(python3 -c "import time; print(int(time.time()*1000))")
+    now_ms=$(_epoch_ms)
     local timestamp_ms=$(( now_ms - start_epoch_ms ))
 
-    # Escape narration text for JSON
-    local text_json
-    text_json=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text")
+    # JSON-escape variable values
+    local text_json persona_json audio_json
+    text_json=$(_json_escape "$text")
+    persona_json=$(_json_escape "$persona")
+    audio_json=$(_json_escape "audio/narr-${seg_count}.aiff")
 
     # Log narration entry to action log
-    echo "{\"frame\": ${seg_count}, \"timestampMs\": ${timestamp_ms}, \"persona\": \"${persona}\", \"action\": \"narration\", \"narration\": ${text_json}, \"audioFile\": \"audio/narr-${seg_count}.aiff\", \"durationMs\": ${duration_ms}}" \
+    echo "{\"frame\": ${seg_count}, \"timestampMs\": ${timestamp_ms}, \"persona\": ${persona_json}, \"action\": \"narration\", \"narration\": ${text_json}, \"audioFile\": ${audio_json}, \"durationMs\": ${duration_ms}}" \
         >> "${output_dir}/action-log.jsonl"
 
     # Write pending narration duration — next session-capture will auto-use it
@@ -1707,28 +1748,34 @@ cmd_session_scene() {
 
     # Get session start time
     local start_epoch_ms
-    start_epoch_ms=$(python3 -c "import json; print(json.load(open('${state_file}'))['startEpochMs'])")
+    start_epoch_ms=$(_json_read "$state_file" startEpochMs)
     local now_ms
-    now_ms=$(python3 -c "import time; print(int(time.time()*1000))")
+    now_ms=$(_epoch_ms)
     local timestamp_ms=$(( now_ms - start_epoch_ms ))
 
     # Use first persona as default speaker
     [[ -z "$speaker" ]] && \
-        speaker=$(python3 -c "import json; print(json.load(open('${state_file}'))['personas'][0])")
+        speaker=$(_session_first_persona "$state_file")
 
-    # Compute frame number for this speaker from action log
-    local frame_count
-    frame_count=$(grep -c "\"persona\": \"${speaker}\", \"action\": \"screenshot\"" "${output_dir}/action-log.jsonl" 2>/dev/null || true)
-    frame_count=${frame_count:-0}
+    # Read frame counter (O(1))
+    local counter_file="${output_dir}/.frame-count-${speaker}"
+    local frame_count=0
+    [[ -f "$counter_file" ]] && frame_count=$(cat "$counter_file")
+
+    # JSON-escape variable values
+    local speaker_json scene_json layout_json
+    speaker_json=$(_json_escape "$speaker")
+    scene_json=$(_json_escape "$scene_name")
+    layout_json=$(_json_escape "$layout")
 
     # Build optional fields
     local narration_field=""
-    [[ -n "$narration" ]] && narration_field=", \"narration\": $(python3 -c "import json; print(json.dumps('${narration}'))")"
+    [[ -n "$narration" ]] && narration_field=", \"narration\": $(_json_escape "$narration")"
 
     local hold_field=""
     [[ -n "$hold_ms" ]] && hold_field=", \"holdMs\": ${hold_ms}"
 
-    echo "{\"frame\": ${frame_count}, \"timestampMs\": ${timestamp_ms}, \"persona\": \"${speaker}\", \"action\": \"scene\", \"target\": \"${scene_name}\", \"layout\": \"${layout}\"${narration_field}${hold_field}}" \
+    echo "{\"frame\": ${frame_count}, \"timestampMs\": ${timestamp_ms}, \"persona\": ${speaker_json}, \"action\": \"scene\", \"target\": ${scene_json}, \"layout\": ${layout_json}${narration_field}${hold_field}}" \
         >> "${output_dir}/action-log.jsonl"
 
     echo "Scene '${scene_name}' logged (layout: ${layout}, speaker: ${speaker})"
@@ -1768,7 +1815,7 @@ cmd_session_end() {
     # Step 2: Assemble screenshots into per-persona videos
     echo ""
     echo "--- Assembling per-persona videos ---"
-    cmd_assemble "" "$output_dir" "$action_log"
+    cmd_assemble assemble "$output_dir" "$action_log"
 
     if $skip_mux; then
         echo ""
@@ -1797,7 +1844,7 @@ cmd_session_end() {
 
         echo ""
         echo "--- Muxing single-persona video with narration ---"
-        cmd_mux "" "$output_dir" "$video" "$final_output"
+        cmd_mux mux "$output_dir" "$video" "$final_output"
 
         echo ""
         echo "=== Final video: ${final_output} ==="
@@ -1814,7 +1861,7 @@ cmd_session_end() {
         local first_video="${assembled_videos[0]}"
         local final_output="${output_dir}/final.mp4"
         echo "--- Muxing first persona video as default ---"
-        cmd_mux "" "$output_dir" "$first_video" "$final_output"
+        cmd_mux mux "$output_dir" "$first_video" "$final_output"
 
         echo ""
         echo "=== Default video: ${final_output} ==="
