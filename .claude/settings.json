@@ -16,7 +16,9 @@
       "Bash(find ~/dev*ux-simulator*)",
       "mcp__ux-recording__*",
       "mcp__chrome-devtools-2__*",
-      "mcp__chrome-devtools-3__*"
+      "mcp__chrome-devtools-3__*",
+      "Read(/tmp/ux-review-*)",
+      "Read(/tmp/ux-expert-*)"
     ]
   }
 }

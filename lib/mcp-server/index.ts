@@ -4,7 +4,7 @@
  * Exposes recording commands as MCP tools so they auto-approve in Claude Code,
  * eliminating the 20-40 permission prompts per UX review session.
  *
- * Tools: ux_session_start, ux_session_step, ux_session_end
+ * Tools: ux_record_start, ux_record_step, ux_record_compile
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -12,19 +12,15 @@ import {
 	CallToolRequestSchema,
 	ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import * as path from 'path';
-import * as fs from 'fs';
-
-import { RecorderSession } from '../recorder.js';
-import type { PersonaConfig } from '../recorder.js';
+import { StepRecorderSession } from '../recorder.js';
 import type { SceneLayout } from '../narrator.js';
-import { generateSpeech, getFileDuration } from '../ffmpeg-utils.js';
-import { composeSession } from '../compose-session.js';
+import { compileFromSteps } from '../compose-session.js';
+import type { FindingsMode } from '../report-generator.js';
 
-let session: RecorderSession | null = null;
+let stepSession: StepRecorderSession | null = null;
 
 const server = new Server(
-	{ name: 'ux-recording', version: '0.1.0' },
+	{ name: 'ux-recording', version: '0.3.0' },
 	{ capabilities: { tools: {} } }
 );
 
@@ -35,9 +31,9 @@ const server = new Server(
 server.setRequestHandler( ListToolsRequestSchema, async () => ( {
 	tools: [
 		{
-			name: 'ux_session_start',
+			name: 'ux_record_start',
 			description:
-				'Initialize a UX recording session. Creates output directories and prepares the recorder.',
+				'Initialize a step-based recording session. No TTS during recording — observations become narration at compile time.',
 			inputSchema: {
 				type: 'object' as const,
 				properties: {
@@ -55,9 +51,9 @@ server.setRequestHandler( ListToolsRequestSchema, async () => ( {
 			},
 		},
 		{
-			name: 'ux_session_step',
+			name: 'ux_record_step',
 			description:
-				'Combined recording step: mark a scene boundary, generate narration audio, and/or register a screenshot. All fields optional except outputDir.',
+				'Record one step: screenshot + observations + optional scene marker. No TTS — observations become narration at compile time.',
 			inputSchema: {
 				type: 'object' as const,
 				properties: {
@@ -65,43 +61,38 @@ server.setRequestHandler( ListToolsRequestSchema, async () => ( {
 						type: 'string',
 						description: 'Session output directory',
 					},
+					persona: {
+						type: 'string',
+						description: 'Which persona is acting',
+					},
+					screenshot: {
+						type: 'string',
+						description: 'Absolute path to the screenshot PNG file',
+					},
+					observations: {
+						type: 'string',
+						description: 'What the tester observes (becomes narration audio at compile time). 1-2 sentences.',
+					},
+					nextAction: {
+						type: 'string',
+						description: 'What they will do next (context only, not spoken)',
+					},
 					scene: {
 						type: 'string',
-						description: 'Start a new scene with this name',
+						description: 'Start a new scene with this name (omit to continue current scene)',
 					},
 					layout: {
 						type: 'string',
 						description: 'Scene layout: full | split | pip-<name>',
 					},
-					speaker: {
-						type: 'string',
-						description: 'Active persona for the scene/narration',
-					},
-					narrate: {
-						type: 'string',
-						description: 'Text to speak (keep short: 1-2 sentences, 3-5 seconds)',
-					},
-					voice: {
-						type: 'string',
-						description: 'TTS voice name (e.g. Samantha, Daniel)',
-					},
-					capture: {
-						type: 'object',
-						properties: {
-							persona: { type: 'string', description: 'Persona who owns this screenshot' },
-							file: { type: 'string', description: 'Absolute path to the screenshot PNG' },
-						},
-						required: [ 'persona', 'file' ],
-						description: 'Register a screenshot capture',
-					},
 				},
-				required: [ 'outputDir' ],
+				required: [ 'outputDir', 'persona', 'screenshot' ],
 			},
 		},
 		{
-			name: 'ux_session_end',
+			name: 'ux_record_compile',
 			description:
-				'Finalize the recording session and compose the final video with findings report.',
+				'Compile a step-based recording: batch TTS from observations, measure durations, assemble video, generate findings.',
 			inputSchema: {
 				type: 'object' as const,
 				properties: {
@@ -112,6 +103,11 @@ server.setRequestHandler( ListToolsRequestSchema, async () => ( {
 					scenarioName: {
 						type: 'string',
 						description: 'Name for the scenario (used in the findings report title)',
+					},
+					mode: {
+						type: 'string',
+						enum: [ 'simulator', 'expert' ],
+						description: 'Findings mode: "simulator" (default) uses positive/negative signals, "expert" classifies by review lens (IA, visual, copy, flow)',
 					},
 				},
 				required: [ 'outputDir' ],
@@ -129,12 +125,12 @@ server.setRequestHandler( CallToolRequestSchema, async ( request ) => {
 
 	try {
 		switch ( name ) {
-			case 'ux_session_start':
-				return handleStart( args as Record< string, unknown > );
-			case 'ux_session_step':
-				return handleStep( args as Record< string, unknown > );
-			case 'ux_session_end':
-				return handleEnd( args as Record< string, unknown > );
+			case 'ux_record_start':
+				return handleRecordStart( args as Record< string, unknown > );
+			case 'ux_record_step':
+				return handleRecordStep( args as Record< string, unknown > );
+			case 'ux_record_compile':
+				return handleRecordCompile( args as Record< string, unknown > );
 			default:
 				return {
 					content: [ { type: 'text' as const, text: `Unknown tool: ${ name }` } ],
@@ -154,101 +150,63 @@ server.setRequestHandler( CallToolRequestSchema, async ( request ) => {
 // Handlers
 // ---------------------------------------------------------------------------
 
-function handleStart( args: Record< string, unknown > ) {
+function handleRecordStart( args: Record< string, unknown > ) {
 	const outputDir = args.outputDir as string;
-	const personaNames = args.personas as string[];
+	const personas = args.personas as string[];
 
-	// Build persona configs — assign MCP servers round-robin
-	const mcpServers = [ 'chrome-devtools-2', 'chrome-devtools-3' ];
-	const personas: Record< string, PersonaConfig > = {};
-	for ( let i = 0; i < personaNames.length; i++ ) {
-		personas[ personaNames[ i ] ] = {
-			mcpServer: mcpServers[ i % mcpServers.length ],
-		};
-	}
-
-	session = new RecorderSession( { outputDir, personas } );
+	stepSession = new StepRecorderSession( { outputDir, personas } );
 
 	return {
 		content: [ {
 			type: 'text' as const,
 			text: JSON.stringify( {
 				status: 'started',
+				format: 'step-based',
 				outputDir,
-				personas: personaNames,
-				screenshotDir: session.getScreenshotDir(),
+				personas,
+				screenshotDir: stepSession.getScreenshotDir(),
 			} ),
 		} ],
 	};
 }
 
-function handleStep( args: Record< string, unknown > ) {
-	if ( ! session ) {
-		throw new Error( 'No active session. Call ux_session_start first.' );
+function handleRecordStep( args: Record< string, unknown > ) {
+	if ( ! stepSession ) {
+		throw new Error( 'No active step session. Call ux_record_start first.' );
 	}
 
-	const results: Record< string, unknown > = {};
-	const speaker = ( args.speaker as string | undefined ) ?? session.getPersonaNames()[ 0 ];
+	const persona = args.persona as string;
+	const screenshotFile = args.screenshot as string;
 
-	// 1. Scene marker
-	if ( args.scene ) {
-		const layout = ( args.layout as SceneLayout ) ?? 'full';
-		session.logScene( args.scene as string, { layout, speaker } );
-		results.scene = args.scene;
-	}
-
-	// 2. Narration (TTS)
-	let narrationDurationSec = 0;
-	if ( args.narrate ) {
-		const text = args.narrate as string;
-		const voice = args.voice as string | undefined;
-
-		const audioDir = path.join( session.getOutputDir(), 'audio' );
-		fs.mkdirSync( audioDir, { recursive: true } );
-		const audioFile = path.join( audioDir, `narration-${ Date.now() }.aiff` );
-
-		generateSpeech( text, audioFile, voice );
-		narrationDurationSec = getFileDuration( audioFile );
-
-		session.logNarration( speaker, audioFile, narrationDurationSec, text );
-		results.narrationDuration = narrationDurationSec;
-	}
-
-	// 3. Capture (register screenshot)
-	if ( args.capture ) {
-		const capture = args.capture as { persona: string; file: string };
-		const durationMs = narrationDurationSec > 0
-			? Math.round( narrationDurationSec * 1000 )
-			: undefined;
-		const captureResult = session.logScreenshot( capture.persona, capture.file, durationMs );
-		results.frame = captureResult.frame;
-		results.verified = captureResult.verified;
-	}
+	const result = stepSession.logStep( {
+		persona,
+		screenshotFile,
+		observations: ( args.observations ?? args.observation ) as string | undefined,
+		nextAction: args.nextAction as string | undefined,
+		scene: args.scene as string | undefined,
+		layout: args.layout as SceneLayout | undefined,
+	} );
 
 	return {
 		content: [ {
 			type: 'text' as const,
-			text: JSON.stringify( results ),
+			text: JSON.stringify( result ),
 		} ],
 	};
 }
 
-function handleEnd( args: Record< string, unknown > ) {
-	if ( ! session ) {
-		throw new Error( 'No active session. Call ux_session_start first.' );
-	}
-
+function handleRecordCompile( args: Record< string, unknown > ) {
 	const outputDir = args.outputDir as string;
 	const scenarioName = args.scenarioName as string | undefined;
+	const mode = ( args.mode as FindingsMode | undefined ) ?? 'simulator';
 
-	// Finalize the session (writes manifest)
-	const stats = session.finalize();
+	// Finalize session if active
+	if ( stepSession ) {
+		stepSession.finalize();
+		stepSession = null;
+	}
 
-	// Compose the final video
-	const result = composeSession( { outputDir, scenarioName } );
-
-	// Clean up session state
-	session = null;
+	const result = compileFromSteps( { outputDir, scenarioName, mode } );
 
 	return {
 		content: [ {
@@ -258,7 +216,6 @@ function handleEnd( args: Record< string, unknown > ) {
 				findingsPath: result.findingsPath,
 				sceneCount: result.sceneCount,
 				personas: result.personas,
-				stats,
 			} ),
 		} ],
 	};

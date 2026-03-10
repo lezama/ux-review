@@ -6,10 +6,12 @@
     "name": "Miguel Lezama"
   },
   "commands": [
-    "./commands/ux-review.md"
+    "./commands/ux-review.md",
+    "./commands/ux-expert.md"
   ],
   "agents": [
-    "./.claude/agents/simulator.md"
+    "./.claude/agents/simulator.md",
+    "./.claude/agents/expert.md"
   ],
   "mcpServers": "./.mcp.json"
 }

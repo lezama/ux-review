@@ -1,6 +1,6 @@
 # /test-recording — Automated Recording Pipeline Test
 
-Run a headless end-to-end test of the UX recording pipeline. No browser needed — uses dummy PNGs to exercise the full flow: MCP tools → action log → TTS → video composition → findings.
+Run a headless end-to-end test of the UX recording pipeline. No browser needed — uses dummy PNGs to exercise the full flow: MCP tools → step log → TTS → video composition → findings.
 
 ## Steps
 
@@ -20,7 +20,7 @@ ffmpeg -y -f lavfi -i color=c=green:s=1920x1080:d=1 -frames:v 1 "$TESTDIR/shot3.
 Call each tool in sequence — these are MCP calls, no Bash:
 
 ```
-ux_session_start({
+ux_record_start({
   outputDir: "$TESTDIR/output",
   personas: ["tester"]
 })
@@ -29,41 +29,43 @@ ux_session_start({
 Copy the dummy PNGs into the screenshot directory returned by start, then:
 
 ```
-ux_session_step({
+ux_record_step({
   outputDir: "$TESTDIR/output",
+  persona: "tester",
+  screenshot: "$TESTDIR/output/screenshots/tester/0000.png",
+  observations: "This is the first page. It looks clean and simple.",
   scene: "homepage",
-  layout: "full",
-  speaker: "tester",
-  narrate: "This is the first page. It looks clean and simple.",
-  voice: "Samantha",
-  capture: { persona: "tester", file: "$TESTDIR/shot1.png" }
+  layout: "full"
 })
 
-ux_session_step({
+ux_record_step({
   outputDir: "$TESTDIR/output",
-  narrate: "Moving to the second view now.",
-  voice: "Samantha",
-  capture: { persona: "tester", file: "$TESTDIR/shot2.png" }
+  persona: "tester",
+  screenshot: "$TESTDIR/output/screenshots/tester/0001.png",
+  observations: "Moving to the second view now."
 })
 
-ux_session_step({
+ux_record_step({
   outputDir: "$TESTDIR/output",
-  capture: { persona: "tester", file: "$TESTDIR/shot3.png" }
+  persona: "tester",
+  screenshot: "$TESTDIR/output/screenshots/tester/0002.png"
 })
 
-ux_session_end({
+ux_record_compile({
   outputDir: "$TESTDIR/output",
   scenarioName: "Pipeline Test"
 })
 ```
 
+Note: Before each `ux_record_step`, copy the corresponding dummy PNG to the screenshot path (e.g., `cp $TESTDIR/shot1.png $TESTDIR/output/screenshots/tester/0000.png`).
+
 ### 3. Evaluate
 
-After `ux_session_end` returns, run these checks:
+After `ux_record_compile` returns, run these checks:
 
 ```bash
 # Check all expected output files exist
-for f in action-log.jsonl session-manifest.json composed-final.mp4 findings.md; do
+for f in steps.jsonl session-manifest.json composed-final.mp4 findings.md; do
   [ -f "$TESTDIR/output/$f" ] && echo "✓ $f" || echo "✗ $f MISSING"
 done
 
@@ -75,7 +77,7 @@ echo "✓ Audio files: $AUDIO_COUNT (expected: 2)"
 ffprobe -v quiet -show_entries format=duration -show_entries stream=codec_type -of json "$TESTDIR/output/composed-final.mp4"
 ```
 
-Then read the ffprobe output and the action-log.jsonl. Evaluate:
+Then read the ffprobe output and the steps.jsonl. Evaluate:
 
 | Check | Pass condition |
 |-------|---------------|
@@ -83,10 +85,10 @@ Then read the ffprobe output and the action-log.jsonl. Evaluate:
 | Audio stream | ffprobe shows `codec_type: "audio"` |
 | Video stream | ffprobe shows `codec_type: "video"` |
 | Duration | Between 2s and 15s (3 frames + 2 narrations) |
-| Action log | Has entries for: 1 scene, 2 narrations, 3 screenshots |
+| Steps log | `steps.jsonl` has 3 entries (1 with scene, 2 with observations) |
 | Audio files | 2 `.aiff` files in `audio/` directory |
 | Findings | `findings.md` exists and is non-empty |
-| Narration sync | Frames with narration have `durationMs` matching audio duration |
+| Narration sync | Steps with observations have matching TTS audio files |
 
 ### 4. Report
 
@@ -100,10 +102,10 @@ RECORDING PIPELINE TEST
   ✓ Video: composed-final.mp4 (X.Xs, XXkb)
   ✓ Audio stream: AAC
   ✓ Video stream: H.264
-  ✓ Action log: N entries (1 scene, 2 narrations, 3 screenshots)
+  ✓ Steps log: N entries (1 scene, 2 observations)
   ✓ Audio files: 2 narrations generated
   ✓ Findings: findings.md (N bytes)
-  ✓ Sync: frame durations match narration audio
+  ✓ Sync: TTS audio files match narrated steps
 
   Result: PASS (7/7)
   Output: /tmp/ux-recording-test-XXXXX/output/
@@ -120,7 +122,7 @@ open "$TESTDIR/output/composed-final.mp4"
 ### 5. Self-fix (if any check fails)
 
 If a check fails:
-1. Read the error output and action-log.jsonl
+1. Read the error output and steps.jsonl
 2. Identify the root cause in the source code (`lib/` directory)
 3. Fix it
 4. Rebuild: `cd /Users/miguel/dev/a8c/ux-simulator && npm run build`

@@ -84,7 +84,9 @@ Single-persona review focused on first-time experience.
 |--------|-------------|
 | `composed-final.mp4` | Video with narration, subtitles, and transitions |
 | `findings.md` | UX findings: what worked, friction points, suggestions |
-| `action-log.jsonl` | Timestamped log of every action and screenshot |
+| `steps.jsonl` | Declarative step log (screenshot + observations per step) |
+| `action-log.jsonl` | Backward-compatible action log (generated at compile time) |
+| `compile-log.jsonl` | Compile diagnostics: per-step timing, audio durations, duplicate warnings |
 | `screenshots/` | All captured frames organized by persona |
 
 ## How the Interview Works
@@ -116,13 +118,12 @@ claude mcp add chrome-devtools-3 -- npx chrome-devtools-mcp@latest --isolated --
   │
   ├── Phase 1: Interview → Build test script
   ├── Phase 2: Confirm test script with user
-  ├── Phase 3: Execute recording
-  │     ├── session-start (init personas)
-  │     ├── session-scene (mark scene boundaries)
-  │     ├── session-narrate (TTS voiceover)
-  │     ├── take_screenshot → session-capture (verified frames)
-  │     └── session-end → session-compose (auto-compose)
-  └── Phase 4: Report findings
+  ├── Phase 3: Execute recording (no TTS)
+  │     ├── ux_record_start (init personas)
+  │     ├── take_screenshot → ux_record_step (screenshot + observations)
+  │     └── repeat for each step
+  └── Phase 4: Compile & report
+        ├── ux_record_compile (batch TTS → video → findings)
         ├── composed-final.mp4
         └── findings.md
 ```

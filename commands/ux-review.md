@@ -101,164 +101,117 @@ Present the plan briefly, then **proceed immediately** — do not ask for confir
 
 ### Setup
 
-Initialize the recording session with `ux_session_start`. Choose an output directory and list the personas:
+Initialize the recording session with `ux_record_start`:
 
 ```
-ux_session_start({
+ux_record_start({
   outputDir: "/tmp/ux-review-<timestamp>",
   personas: ["admin", "buyer"]
 })
 ```
 
-This creates the output directory, screenshot folders, and initializes the recorder. No bash scripts needed — the MCP server handles everything.
-
-### The `ux_session_step` Tool
-
-**Use `ux_session_step` for ALL recording operations.** It combines scene + narrate + capture into a SINGLE MCP tool call with NO permission prompts:
-
-```
-ux_session_step({
-  outputDir: "/tmp/ux-review-XXXXX",
-  scene: "login",
-  layout: "full",
-  speaker: "admin",
-  narrate: "I see the login page.",
-  voice: "Samantha",
-  capture: { persona: "admin", file: "/path/to/screenshot.png" }
-})
-```
-
-All fields are optional except `outputDir` — use only what you need:
-
-```
-// Just capture a screenshot (no narration)
-ux_session_step({
-  outputDir: "/tmp/ux-review-XXXXX",
-  capture: { persona: "admin", file: "/path/to/screenshot.png" }
-})
-
-// Narrate + capture
-ux_session_step({
-  outputDir: "/tmp/ux-review-XXXXX",
-  narrate: "Clean layout.",
-  voice: "Samantha",
-  capture: { persona: "admin", file: "/path/to/shot.png" }
-})
-
-// New scene + narrate + capture
-ux_session_step({
-  outputDir: "/tmp/ux-review-XXXXX",
-  scene: "checkout",
-  speaker: "admin",
-  narrate: "Moving to checkout.",
-  capture: { persona: "admin", file: "/path/to/shot.png" }
-})
-```
-
-### Recording Loop
-
-For each task, follow the **observe-act-observe** rhythm. **Narrations must be SHORT (1-2 sentences, 3-5 seconds of speech).**
-
-**The rhythm:**
-
-1. **Take screenshot** (MCP: `take_screenshot`)
-2. **Step with scene + narrate + capture**:
-   ```
-   ux_session_step({ outputDir, scene: "task-name", layout: "full", speaker: "admin",
-     narrate: "I see the login page.", voice: "Samantha",
-     capture: { persona: "admin", file: "/path/to/screenshot.png" } })
-   ```
-3. **Act** in browser (MCP: click, fill, navigate)
-4. **Take screenshot** (MCP)
-5. **Step with narrate + capture**:
-   ```
-   ux_session_step({ outputDir,
-     narrate: "Logged in. Dashboard looks clean.", voice: "Samantha",
-     capture: { persona: "admin", file: "/path/to/screenshot.png" } })
-   ```
-6. **Act** → **screenshot** → **step** → repeat
-
-**CRITICAL PACING RULES:**
-- **Max 2 sentences per narration.** If you want to say more, use a separate step.
-- **3-5 seconds per narration.** Never exceed 8 seconds.
-- **Take multiple screenshots** between narrations. The screen should change.
-- **4-6 screenshots per task**, not 1.
+@commands/_recording-rules.md
 
 **Bad** (monologue — NEVER do this):
 ```
-narrate: "Here's the gift card page. The header says Gift cards with a subtitle. I can see a table with columns for Name, Status, Balance. There's a Create button..."
+observations: "Here's the gift card page. The header says Gift cards with a subtitle. I can see a table with columns for Name, Status, Balance. There's a Create button..."
 ```
 That's 30+ seconds over ONE frozen frame. Unwatchable.
 
-**Good** (short bursts):
+**Bad** (narrating every frame):
 ```
-take_screenshot → ux_session_step({ narrate: "I'm on the gift cards page. Clean layout.", capture: { persona: "admin", file: "shot1.png" } })
-click "Create"
-take_screenshot → ux_session_step({ narrate: "Creation form opened.", capture: { persona: "admin", file: "shot2.png" } })
-fill name
-take_screenshot → ux_session_step({ capture: { persona: "admin", file: "shot3.png" } })
-ux_session_step({ narrate: "Nice, auto-generated a code.", capture: { persona: "admin", file: "shot4.png" } })
+take_screenshot → step({ observations: "I see the login page." })
+fill username
+take_screenshot → step({ observations: "I typed my username." })
+fill password
+take_screenshot → step({ observations: "Now I typed my password." })
+click login
+take_screenshot → step({ observations: "I clicked login." })
+```
+Over-narrating is robotic. Let the video breathe.
+
+**Good** (natural rhythm — silent action frames + occasional observations):
+```
+take_screenshot → step({ observations: "I'm on the login page.", scene: "login" })
+fill username
+take_screenshot → step({})                    ← silent, shows typing
+fill password
+take_screenshot → step({})                    ← silent, shows filled form
+click login
+take_screenshot → step({})                    ← silent, shows loading/transition
+take_screenshot → step({ observations: "I'm in. Dashboard looks clean.", scene: "dashboard" })
+click "Forms"
+take_screenshot → step({})                    ← silent, shows navigation
+take_screenshot → step({ observations: "Here's the forms list. Four items." })
 ```
 
-### See the Page Like a User
-
-**Use `take_screenshot` to see the page, then Read the screenshot to understand what's visible.** This is how a real user tester works — they look at the screen, not the source code. Never use `evaluate_script` to inspect HTML/DOM for deciding what to narrate or where to click. Base all observations and decisions on what you can **see** in the screenshots.
-
-The first time you Read a screenshot, select **"Yes, allow reading from screenshots/ during this session"** to avoid repeated prompts.
-
-### Browser Preparation
-
-Before recording each persona:
-- **Hide automation infobar**: Inject CSS via `evaluate_script` after each navigation
-- **Fullscreen**: Press F11 to remove browser chrome
-- **Correct login**: Ensure each persona is logged in as their role, not as admin
 
 ### Narration Guidelines
 
-Narrate as a **first-time user discovering the product**. You do NOT know the codebase, the feature names, or the internal terminology. You're seeing everything fresh.
+You are a **regular person** — not a designer, not a developer, not a QA tester. You have average computer skills. You use apps to get things done, not to admire them. You get frustrated when things don't work. You don't sugarcoat.
 
 **Persona mindset:**
 - You don't know where things are — you're looking for them
-- You don't use internal names — you describe what you see
-- You react with genuine surprise, confusion, or delight
-- You make mistakes and recover naturally
+- You don't use design/UX vocabulary — no "clean layout", "breadcrumb navigation", "embed code", "empty state", "CTA"
+- You get **impatient** when things are slow or confusing
+- You get **annoyed** when something doesn't make sense
+- You blame the software, not yourself — "Why is this so complicated?" not "I must be doing something wrong"
+- You don't compliment things unless genuinely impressed — and even then, keep it casual
 
-**Good (discovering, not knowing):**
-- "Okay, I'm logged in. Let me look around... there's a sidebar with a bunch of options."
+**Good (real person, not a reviewer):**
+- "Okay, I'm in. Where do I go from here... there's a ton of stuff in this sidebar."
 - *(click)* *(screenshot)*
-- "I think this might be under Catalog? Let me check."
+- "Maybe it's under this one? Let me try."
 - *(screenshot)*
-- "Oh, there it is. That was easy to find."
+- "Yeah, there it is. Took me a second."
+- "I have no idea what this button does."
+- "Why is it asking me this again? I already filled that out."
+- "Okay that worked, I think."
 
-**Bad (too knowledgeable):**
-- "I'll navigate to Catalog > Gift Cards to access the gift card management interface." ← Sounds like someone reading docs, not a real user.
-- "The CIAB admin shows the onboarding wizard with setup steps." ← Using internal project names.
+**Bad (too polished / too nice — NEVER do this):**
+- "Clean layout with good visual hierarchy." ← Design vocabulary. Real people don't talk like this.
+- "Nice! The breadcrumb navigation is helpful." ← No one calls them "breadcrumbs."
+- "I like the empty state message. Good guidance." ← UX reviewer talk, not a real user.
+- "The form editor opened. I can see my form fields and a block inserter with lots of field types." ← Cataloging the UI like a QA tester.
+- "Pretty nice overall." ← Too agreeable. Be honest.
+
+**Also bad (too knowledgeable):**
+- "I'll navigate to Catalog > Gift Cards to access the management interface." ← Reading docs.
+- "The CIAB admin shows the onboarding wizard." ← Internal project names.
 
 **What to comment on (one thing at a time):**
-- First impressions — "Okay, this looks pretty clean."
-- Confusion — "Hmm, not sure what this button does."
-- Discovery — "Oh, I think this is what I need."
-- Delight — "Nice, it filled that in for me."
-- Errors — "Wait, nothing happened."
+- Confusion — "Wait, what? Where did that go?"
+- Frustration — "This is taking forever."
+- Surprise — "Oh, it actually did it. Wasn't expecting that."
+- Getting lost — "I don't know where I am anymore."
+- Relief — "Okay finally."
+- Errors — "It's not doing anything. Is it broken?"
+
+**Do NOT comment on:**
+- Layout quality, visual design, whitespace, typography
+- Navigation patterns by name (breadcrumbs, sidebar, tabs)
+- Technical concepts (embed code, shortcode, API, blocks)
+- Anything a non-tech person wouldn't notice or care about
 
 Use different voices per persona:
 - `-v Samantha` (default), `-v Daniel`, `-v Karen`, `-v Tom`
 
-## Phase 4: Compose & Report
+## Phase 4: Compile & Report
 
 After all tasks are complete:
 
 ```
-ux_session_end({
+ux_record_compile({
   outputDir: "/tmp/ux-review-XXXXX",
   scenarioName: "Feature Name UX Review"
 })
 ```
 
 This automatically:
+- Generates TTS audio from all observations (batch, not during recording)
+- Measures audio durations to set frame timing (frame duration = narration duration)
 - Assembles per-persona videos from screenshots
 - Composes multi-persona video with layouts and transitions (if applicable)
-- Generates narration audio and subtitles
 - Produces `findings.md` with UX observations
 
 ### Present Results

@@ -243,15 +243,33 @@ export interface Findings {
 	markdown: string;
 }
 
+export type FindingsMode = 'simulator' | 'expert';
+
+interface FindingsSection {
+	title: string;
+	items: string[];
+	numbered?: boolean;
+}
+
+interface ClassificationRule {
+	key: string;
+	pattern: RegExp;
+	excludePositive?: boolean;
+}
+
 /**
- * Generate UX findings from narration text and scene flow.
+ * Shared scaffolding for findings generation.
  *
- * Extracts observations tagged by the agent during recording (narration text
- * with positive/negative signals) and structures them into a findings report.
+ * Loads narrations from the action log, classifies them against pattern rules,
+ * and builds a markdown report from the resulting sections.
  */
-export function generateFindings( options: {
+function classifyAndReport( options: {
 	actionLogPath: string;
 	scenarioName?: string;
+	title: string;
+	rules: ClassificationRule[];
+	positivePattern: RegExp;
+	buildSections: ( buckets: Record< string, string[] >, workedWell: string[], suggestions: string[] ) => FindingsSection[];
 } ): Findings {
 	const entries = readJSONL< ActionEntry >( options.actionLogPath );
 
@@ -260,80 +278,125 @@ export function generateFindings( options: {
 	);
 	const scenes = entries.filter( ( e ) => e.action === 'scene' );
 	const personas = [ ...new Set( entries.map( ( e ) => e.persona ) ) ];
-	const scenario = options.scenarioName ?? 'UX Simulation';
-
-	const positivePattern =
-		/nice|smooth|clean|clear|easy|automatically|immediately|intuitive|well|great|love|helpful|quick/i;
-	const negativePattern =
-		/confus|unclear|broken|error|missing|unexpected|strange|weird|hard to|difficult|can't find|slow|bug|wrong|fail/i;
+	const scenario = options.scenarioName ?? options.title;
 
 	const workedWell: string[] = [];
 	const frictionPoints: string[] = [];
+	const buckets: Record< string, string[] > = {};
+
+	for ( const rule of options.rules ) {
+		buckets[ rule.key ] = [];
+	}
 
 	for ( const entry of narrations ) {
 		const text = entry.narration!;
 		const scene = findEnclosingScene( scenes, entry.timestampMs );
 		const label = scene?.target ? `[${ scene.target }]` : '';
 		const line = label ? `${ label } ${ text }` : text;
+		const isPositive = options.positivePattern.test( text );
 
-		if ( positivePattern.test( text ) ) {
+		if ( isPositive ) {
 			workedWell.push( line );
 		}
-		if ( negativePattern.test( text ) ) {
-			frictionPoints.push( line );
+
+		for ( const rule of options.rules ) {
+			if ( rule.pattern.test( text ) && ( ! rule.excludePositive || ! isPositive ) ) {
+				buckets[ rule.key ].push( line );
+				frictionPoints.push( line );
+			}
 		}
 	}
 
-	const suggestions: string[] = [];
-	if ( frictionPoints.length > 0 ) {
-		for ( const fp of frictionPoints ) {
-			suggestions.push( `Review: ${ fp.slice( 0, 120 ) }` );
-		}
-	}
+	const uniqueFriction = [ ...new Set( frictionPoints ) ];
+	const suggestions = uniqueFriction.map( ( fp ) => `Review: ${ fp.slice( 0, 120 ) }` );
+	const sections = options.buildSections( buckets, workedWell, suggestions );
 
 	const lines: string[] = [];
-	lines.push( `## UX Simulation Findings` );
+	lines.push( `## ${ options.title }` );
 	lines.push( '' );
 	lines.push( `**Scenario:** ${ scenario }` );
 	lines.push(
-		`**Personas:** ${ personas.join( ', ' ) } | **Scenes:** ${ scenes.length } | **Narrations:** ${ narrations.length }`
+		`**Personas:** ${ personas.join( ', ' ) } | **Scenes:** ${ scenes.length } | **Observations:** ${ narrations.length }`
 	);
 	lines.push( '' );
 
-	if ( workedWell.length > 0 ) {
-		lines.push( `### What Worked Well` );
-		for ( const item of workedWell ) {
-			lines.push( `- ${ item }` );
+	for ( const section of sections ) {
+		if ( section.items.length === 0 ) {
+			continue;
+		}
+		lines.push( `### ${ section.title }` );
+		for ( let i = 0; i < section.items.length; i++ ) {
+			lines.push( section.numbered
+				? `${ i + 1 }. ${ section.items[ i ] }`
+				: `- ${ section.items[ i ] }`
+			);
 		}
 		lines.push( '' );
 	}
-
-	if ( frictionPoints.length > 0 ) {
-		lines.push( `### Friction Points` );
-		for ( const item of frictionPoints ) {
-			lines.push( `- ${ item }` );
-		}
-		lines.push( '' );
-	}
-
-	if ( suggestions.length > 0 ) {
-		lines.push( `### Suggestions` );
-		for ( let i = 0; i < suggestions.length; i++ ) {
-			lines.push( `${ i + 1 }. ${ suggestions[ i ] }` );
-		}
-		lines.push( '' );
-	}
-
-	const markdown = lines.join( '\n' );
 
 	return {
 		scenario,
 		personas,
 		workedWell,
-		frictionPoints,
+		frictionPoints: uniqueFriction,
 		suggestions,
-		markdown,
+		markdown: lines.join( '\n' ),
 	};
+}
+
+/**
+ * Generate UX findings from narration text and scene flow.
+ *
+ * Classifies observations into positive/negative signals.
+ */
+export function generateFindings( options: {
+	actionLogPath: string;
+	scenarioName?: string;
+} ): Findings {
+	return classifyAndReport( {
+		...options,
+		title: 'UX Simulation Findings',
+		positivePattern: /nice|smooth|clean|clear|easy|automatically|immediately|intuitive|well|great|love|helpful|quick/i,
+		rules: [ {
+			key: 'friction',
+			pattern: /confus|unclear|broken|error|missing|unexpected|strange|weird|hard to|difficult|can't find|slow|bug|wrong|fail/i,
+		} ],
+		buildSections: ( buckets, workedWell, suggestions ) => [
+			{ title: 'What Worked Well', items: workedWell },
+			{ title: 'Friction Points', items: buckets.friction },
+			{ title: 'Suggestions', items: suggestions, numbered: true },
+		],
+	} );
+}
+
+/**
+ * Generate expert UX findings classified by review lens.
+ *
+ * Modeled after the review style of Matías Ventura and Pablo Honey.
+ */
+export function generateExpertFindings( options: {
+	actionLogPath: string;
+	scenarioName?: string;
+} ): Findings {
+	return classifyAndReport( {
+		...options,
+		title: 'UX Expert Review Findings',
+		positivePattern: /well done|smart|good (?:default|pattern|choice)|intuitive|clear next|elegant|clean|efficient|saves.*trip|inline.*edit|works well|nice touch|solid/i,
+		rules: [
+			{ key: 'ia', pattern: /navigat|hierarch|sidebar|menu|nested|order|group|priorit|redundan|duplicat|appears.*(?:both|twice)|IA\b|information architecture|wayfind|labeling|categoriz/i, excludePositive: true },
+			{ key: 'visual', pattern: /align|spacing|pixel|badge|inconsisten|component|design system|visual|density|row height|off-center|misalign|too tall|too wide|font|typography|icon.*off|layout/i, excludePositive: true },
+			{ key: 'copy', pattern: /label|copy|wording|says.*but|mislead|verbose|terminolog|naming|text.*should|rename|confusing.*(?:name|term|word|label)|precision/i },
+			{ key: 'flow', pattern: /dead end|premature|celebration|no.*(?:feedback|confirmation|next step)|flow|journey|disconnect|fragment|coherent|loading|skeleton|empty state|onboarding/i, excludePositive: true },
+		],
+		buildSections: ( buckets, workedWell, suggestions ) => [
+			{ title: 'Information Architecture', items: buckets.ia },
+			{ title: 'Visual Coherence', items: buckets.visual },
+			{ title: 'Copy & Labeling', items: buckets.copy },
+			{ title: 'Flow & Journey', items: buckets.flow },
+			{ title: 'What Works Well', items: workedWell },
+			{ title: 'Actionable Suggestions', items: suggestions, numbered: true },
+		],
+	} );
 }
 
 function findEnclosingScene(

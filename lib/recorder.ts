@@ -1,43 +1,22 @@
 /**
- * Recorder — Screenshot-based recording orchestrator.
+ * Recorder — Step-based recording orchestrator.
  *
- * Replaces the fragile screencapture approach with deterministic,
- * verified screenshot capture. The agent calls Chrome DevTools MCP
- * `take_screenshot` and then calls `logScreenshot()` to verify and
- * log the frame. The recorder manages state, file paths, numbering,
- * and the action log.
+ * The agent calls Chrome DevTools MCP `take_screenshot` and then calls
+ * `logStep()` to verify and log each frame with optional observations.
+ * TTS happens at compile time, not during recording.
  *
  * Usage pattern (from the agent):
- *   const session = new RecorderSession({ outputDir, personas });
- *   const path = session.nextScreenshotPath('admin');
+ *   const session = new StepRecorderSession({ outputDir, personas: ['admin'] });
  *   // agent calls: take_screenshot({ filePath: path })
- *   session.logScreenshot('admin', path);
+ *   session.logStep({ persona: 'admin', screenshotFile: path, observations: '...' });
  *   // ...repeat for each frame...
  *   session.finalize();
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { ActionLog } from './action-log.js';
-import type { ActionEntry } from './action-log.js';
+import { StepLog } from './step-log.js';
+import type { StepEntry } from './step-log.js';
 import type { SceneLayout } from './narrator.js';
-
-export interface PersonaConfig {
-	mcpServer: string;
-	voice?: string;
-}
-
-export interface RecorderOptions {
-	outputDir: string;
-	personas: Record< string, PersonaConfig >;
-}
-
-export interface CaptureResult {
-	file: string;
-	verified: boolean;
-	timestampMs: number;
-	persona: string;
-	frame: number;
-}
 
 export interface SessionStats {
 	totalFrames: number;
@@ -50,238 +29,163 @@ export interface SessionStats {
 
 const MIN_SCREENSHOT_BYTES = 1024;
 
-export class RecorderSession {
+export interface StepRecorderOptions {
+	outputDir: string;
+	personas: string[];
+}
+
+export interface StepCaptureResult {
+	step: number;
+	verified: boolean;
+	screenshot: string;
+	warning?: string;
+}
+
+/**
+ * Simplified recorder that uses step-based logging.
+ *
+ * No TTS during recording, no action discrimination, no narration pairing.
+ * Each step = screenshot + optional observations. TTS happens at compile time.
+ */
+export class StepRecorderSession {
 	private outputDir: string;
-	private actionLog: ActionLog;
-	private personas: Record< string, PersonaConfig >;
+	private stepLog: StepLog;
+	private personas: string[];
 	private frameCounts: Record< string, number > = {};
 	private startTime: number;
 	private errors: string[] = [];
-	private sceneCount = 0;
-	private narrationCount = 0;
+	private lastScreenshot: string | null = null;
 
-	constructor( options: RecorderOptions ) {
+	constructor( options: StepRecorderOptions ) {
 		this.outputDir = options.outputDir;
 		this.personas = options.personas;
 		this.startTime = Date.now();
 
 		fs.mkdirSync( this.outputDir, { recursive: true } );
+		this.stepLog = new StepLog( this.outputDir, this.personas );
 
-		const personaNames = Object.keys( this.personas );
-		this.actionLog = new ActionLog( this.outputDir, personaNames );
-
-		for ( const name of personaNames ) {
+		for ( const name of this.personas ) {
 			this.frameCounts[ name ] = 0;
 		}
 	}
 
 	/**
 	 * Get the next screenshot file path for a persona.
-	 * The agent should pass this path to `take_screenshot({ filePath })`.
 	 */
 	nextScreenshotPath( persona: string ): string {
 		this.assertPersona( persona );
 		const frame = this.frameCounts[ persona ];
-		return this.actionLog.getScreenshotPath( frame, persona );
+		const padded = String( frame ).padStart( 4, '0' );
+		return path.join(
+			this.stepLog.getScreenshotDir(),
+			persona,
+			`${ padded }.png`
+		);
 	}
 
 	/**
-	 * Verify and log a screenshot after the agent has captured it.
-	 * Returns a CaptureResult with verification status.
+	 * Log a single step: verify screenshot, copy to numbered path, append entry.
 	 */
-	logScreenshot( persona: string, filePath: string, durationMs?: number ): CaptureResult {
-		this.assertPersona( persona );
+	logStep( params: {
+		persona: string;
+		screenshotFile: string;
+		observations?: string;
+		nextAction?: string;
+		scene?: string;
+		layout?: SceneLayout;
+	} ): StepCaptureResult {
+		this.assertPersona( params.persona );
 
-		const frame = this.frameCounts[ persona ];
-		const timestampMs = Date.now() - this.startTime;
-		const verified = this.verifyFile( filePath );
-
+		const verified = this.verifyFile( params.screenshotFile );
 		if ( ! verified ) {
 			this.errors.push(
-				`Frame ${ frame } for ${ persona } failed verification: ${ filePath }`
+				`Step ${ this.stepLog.getStepCount() } for ${ params.persona } failed verification: ${ params.screenshotFile }`
 			);
 		}
 
 		const relPath = path.relative(
-			this.actionLog.getScreenshotDir(),
-			filePath
+			this.stepLog.getScreenshotDir(),
+			params.screenshotFile
 		);
 
-		const entry: ActionEntry = {
-			frame,
-			timestampMs,
-			persona,
-			action: 'screenshot',
-			screenshotFile: relPath,
-			durationMs,
+		const entry: StepEntry = {
+			step: this.stepLog.getStepCount(),
+			timestampMs: Date.now() - this.startTime,
+			persona: params.persona,
+			screenshot: relPath,
+			observations: params.observations,
+			nextAction: params.nextAction,
+			scene: params.scene,
+			layout: params.layout,
 		};
 
-		this.actionLog.append( entry );
-		this.frameCounts[ persona ]++;
+		this.stepLog.append( entry );
+		this.frameCounts[ params.persona ]++;
+
+		// Detect duplicate screenshot (same file used in consecutive steps)
+		let warning: string | undefined;
+		if ( this.lastScreenshot === params.screenshotFile ) {
+			warning = `Duplicate screenshot: ${ relPath } was already used in the previous step. Take a fresh screenshot to avoid a repeated frame in the video.`;
+			this.errors.push( `Step ${ entry.step }: ${ warning }` );
+		}
+		this.lastScreenshot = params.screenshotFile;
 
 		return {
-			file: filePath,
+			step: entry.step,
 			verified,
-			timestampMs,
-			persona,
-			frame,
+			screenshot: relPath,
+			warning,
 		};
 	}
 
-	/**
-	 * Log a browser action (click, fill, navigate, wait).
-	 */
-	logAction(
-		persona: string,
-		action: 'click' | 'fill' | 'navigate' | 'wait',
-		target?: string
-	): void {
-		this.assertPersona( persona );
-		const frame = this.frameCounts[ persona ];
-
-		this.actionLog.append( {
-			frame,
-			timestampMs: Date.now() - this.startTime,
-			persona,
-			action,
-			target,
-		} );
-	}
-
-	/**
-	 * Mark a scene boundary in the action log.
-	 */
-	logScene(
-		name: string,
-		options: {
-			layout?: SceneLayout;
-			narration?: string;
-			speaker?: string;
-			holdMs?: number;
-		} = {}
-	): void {
-		const speaker = options.speaker ?? Object.keys( this.personas )[ 0 ];
-
-		this.actionLog.append( {
-			frame: this.frameCounts[ speaker ] ?? 0,
-			timestampMs: Date.now() - this.startTime,
-			persona: speaker,
-			action: 'scene',
-			target: name,
-			layout: options.layout ?? 'full',
-			narration: options.narration,
-			holdMs: options.holdMs,
-		} );
-
-		this.sceneCount++;
-	}
-
-	/**
-	 * Log a narration event (after the agent has generated TTS audio).
-	 */
-	logNarration(
-		persona: string,
-		audioFile: string,
-		durationSec: number,
-		text: string
-	): void {
-		this.assertPersona( persona );
-
-		const entry: ActionEntry = {
-			frame: this.frameCounts[ persona ],
-			timestampMs: Date.now() - this.startTime,
-			persona,
-			action: 'narration',
-			target: `narration: ${ text.slice( 0, 60 ) }...`,
-			narration: text,
-			durationMs: Math.round( durationSec * 1000 ),
-			audioFile,
-		};
-
-		this.actionLog.append( entry );
-		this.narrationCount++;
-	}
-
-	/**
-	 * Get current session statistics.
-	 */
 	getStats(): SessionStats {
 		const totalFrames = Object.values( this.frameCounts )
 			.reduce( ( sum, n ) => sum + n, 0 );
 
+		const entries = this.stepLog.getEntries();
+		const sceneCount = entries.filter( ( e ) => e.scene ).length;
+		const narrationCount = entries.filter( ( e ) => e.observations ).length;
+
 		return {
 			totalFrames,
 			perPersona: { ...this.frameCounts },
-			sceneCount: this.sceneCount,
-			narrationCount: this.narrationCount,
+			sceneCount,
+			narrationCount,
 			durationEstimateMs: Date.now() - this.startTime,
 			errors: [ ...this.errors ],
 		};
 	}
 
-	/**
-	 * Get the output directory path.
-	 */
 	getOutputDir(): string {
 		return this.outputDir;
 	}
 
-	/**
-	 * Get the action log file path.
-	 */
-	getActionLogPath(): string {
-		return this.actionLog.getLogPath();
-	}
-
-	/**
-	 * Get the screenshot directory path.
-	 */
 	getScreenshotDir(): string {
-		return this.actionLog.getScreenshotDir();
+		return this.stepLog.getScreenshotDir();
 	}
 
-	/**
-	 * Get persona config (MCP server, voice, etc.).
-	 */
-	getPersona( name: string ): PersonaConfig | undefined {
-		return this.personas[ name ];
+	getPersonas(): string[] {
+		return [ ...this.personas ];
 	}
 
-	/**
-	 * Get all persona names.
-	 */
-	getPersonaNames(): string[] {
-		return Object.keys( this.personas );
+	getStepLog(): StepLog {
+		return this.stepLog;
 	}
 
-	/**
-	 * Get the underlying ActionLog for advanced use.
-	 */
-	getActionLog(): ActionLog {
-		return this.actionLog;
-	}
-
-	/**
-	 * Finalize the session. Returns stats summary.
-	 * Call this before running assembly.
-	 */
 	finalize(): SessionStats {
 		const stats = this.getStats();
 
-		// Write a session manifest for downstream tools
 		const manifest = {
+			format: 'step-based',
 			startTime: new Date( this.startTime ).toISOString(),
 			endTime: new Date().toISOString(),
 			outputDir: this.outputDir,
-			actionLog: this.actionLog.getLogPath(),
-			screenshotDir: this.actionLog.getScreenshotDir(),
+			stepLog: this.stepLog.getLogPath(),
+			screenshotDir: this.stepLog.getScreenshotDir(),
 			personas: Object.fromEntries(
-				Object.entries( this.personas ).map( ( [ name, config ] ) => [
+				this.personas.map( ( name ) => [
 					name,
-					{
-						...config,
-						frames: this.frameCounts[ name ],
-					},
+					{ frames: this.frameCounts[ name ] },
 				] )
 			),
 			stats,
@@ -305,9 +209,9 @@ export class RecorderSession {
 	}
 
 	private assertPersona( persona: string ): void {
-		if ( ! ( persona in this.personas ) ) {
+		if ( ! this.personas.includes( persona ) ) {
 			throw new Error(
-				`Unknown persona "${ persona }". Known: ${ Object.keys( this.personas ).join( ', ' ) }`
+				`Unknown persona "${ persona }". Known: ${ this.personas.join( ', ' ) }`
 			);
 		}
 	}
