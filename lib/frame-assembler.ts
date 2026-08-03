@@ -8,7 +8,7 @@
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ENCODE_PRESET, OUTPUT_HEIGHT, OUTPUT_WIDTH, SCALE_PAD_FILTER } from './ffmpeg-utils.js';
+import { ENCODE_PRESET, OUTPUT_HEIGHT, OUTPUT_WIDTH, SCALE_PAD_FILTER, TALL_IMAGE_THRESHOLD, getImageDimensions } from './ffmpeg-utils.js';
 
 export interface FrameInput {
 	/** Absolute or relative path to the PNG screenshot */
@@ -51,23 +51,42 @@ export function assembleFrames( options: AssembleOptions ): string {
 		? `,drawtext=text='${ label }':${ labelStyle }:x=40:y=40`
 		: '';
 
-	// Build per-frame inputs: -loop 1 -t <duration> -i <file>
-	const inputs = frames.map( ( frame ) => {
-		const absPath = path.resolve( frame.file );
-		const durSec = ( frame.durationMs / 1000 ).toFixed( 3 );
-		return `-loop 1 -t ${ durSec } -i ${ JSON.stringify( absPath ) }`;
-	} ).join( ' ' );
-
-	// Build concat filter: scale each input, then concat
+	// Build per-frame inputs.
+	// For normal frames: -loop 1 -t <duration> -i <file>
+	// For tall frames (zoompan): single -i <file> (zoompan generates its own frames)
+	const inputParts: string[] = [];
 	const filterParts: string[] = [];
 	const concatInputs: string[] = [];
 
 	for ( let i = 0; i < frames.length; i++ ) {
-		filterParts.push(
-			`[${ i }:v]${ SCALE_PAD_FILTER },format=yuv420p[v${ i }]`
-		);
+		const absPath = path.resolve( frames[ i ].file );
+		const durSec = ( frames[ i ].durationMs / 1000 ).toFixed( 3 );
+		const dims = getImageDimensions( absPath );
+		const aspectRatio = dims.height && dims.width ? dims.height / dims.width : 0;
+		const isTall = aspectRatio > TALL_IMAGE_THRESHOLD && dims.height > OUTPUT_HEIGHT;
+
+		if ( isTall ) {
+			// Tall screenshot: use zoompan to smoothly scroll top-to-bottom.
+			// Scale width to OUTPUT_WIDTH first, then pan vertically.
+			inputParts.push( `-i ${ JSON.stringify( absPath ) }` );
+			const totalFrames = Math.max( 1, Math.ceil( parseFloat( durSec ) * fps ) );
+			const scaledHeight = Math.round( dims.height * ( OUTPUT_WIDTH / dims.width ) );
+			const panDistance = Math.max( 0, scaledHeight - OUTPUT_HEIGHT );
+			const panSpeed = panDistance / totalFrames;
+			filterParts.push(
+				`[${ i }:v]scale=${ OUTPUT_WIDTH }:-1,zoompan=z='1':x='0':y='min(y+${ panSpeed.toFixed( 4 ) }\\,ih-oh)':d=${ totalFrames }:s=${ OUTPUT_WIDTH }x${ OUTPUT_HEIGHT }:fps=${ fps },format=yuv420p,setsar=1[v${ i }]`
+			);
+		} else {
+			// Normal screenshot: static hold with scale+pad.
+			inputParts.push( `-loop 1 -t ${ durSec } -i ${ JSON.stringify( absPath ) }` );
+			filterParts.push(
+				`[${ i }:v]${ SCALE_PAD_FILTER },format=yuv420p[v${ i }]`
+			);
+		}
 		concatInputs.push( `[v${ i }]` );
 	}
+
+	const inputs = inputParts.join( ' ' );
 
 	filterParts.push(
 		`${ concatInputs.join( '' ) }concat=n=${ frames.length }:v=1:a=0[vraw]`
