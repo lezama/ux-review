@@ -14,8 +14,11 @@ video of the session plus a UX findings report.
 /plugin install ux-review@ux-review-marketplace
 ```
 
-Requires macOS, Node >= 20, ffmpeg, and Chrome. See [AGENTS.md](./AGENTS.md)
-for setup details, TTS engine options, usage, and architecture.
+Requires macOS, Node >= 20, ffmpeg, and Chrome. Narration works out of the
+box with macOS `say`; install [Qwen3-TTS](https://pypi.org/project/qwen-tts/)
+(`pip3.11 install qwen-tts torch soundfile`) for much better voices. See
+[AGENTS.md](./AGENTS.md) for setup details, TTS engine options, usage, and
+architecture.
 
 ## Output
 

@@ -34,18 +34,38 @@ cd /path/to/ux-review
 npm install && npm run build
 ```
 
-### Kokoro TTS (recommended)
+### TTS engines
 
-High-quality local TTS with natural-sounding voices. Auto-detected when installed:
+Narration audio is generated at compile time. Engines are auto-detected in
+priority order: **Qwen3-TTS → Kokoro → macOS `say`**. With no optional
+installs, `say` always works.
+
+**Qwen3-TTS (recommended — best quality):**
+
+```bash
+pip3.11 install qwen-tts torch soundfile
+```
+
+The first compile downloads the `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` model
+from Hugging Face and loads it once per batch (~20s warmup). For faster
+iteration, keep the model warm in a local server:
+
+```bash
+python3.11 bin/qwen-tts-server.py &   # listens on /tmp/qwen-tts.sock
+```
+
+macOS voice names are mapped to Qwen speakers (Samantha → Ryan,
+Daniel → Aiden), so persona voice maps work unchanged across engines.
+
+**Kokoro (lighter alternative):**
 
 ```bash
 pip3.11 install kokoro soundfile
 ```
 
-Set `TTS_ENGINE` to control which engine is used:
-- `TTS_ENGINE=auto` — Use Kokoro if available, else macOS `say` (default)
-- `TTS_ENGINE=kokoro` — Force Kokoro (fails if not installed)
-- `TTS_ENGINE=say` — Force macOS `say`
+**Engine override** via `TTS_ENGINE`:
+- unset — auto-detect (qwen → kokoro → say)
+- `TTS_ENGINE=qwen` | `kokoro` | `say` — force a specific engine
 
 ## Usage
 
