@@ -15,14 +15,18 @@ import type { SceneSegment } from './action-log.js';
 import { StepLog } from './step-log.js';
 import type { StepEntry } from './step-log.js';
 import { assembleFrames } from './frame-assembler.js';
-import { concatenateAudio, generateSilence, generateSpeech, getFileDuration, isDualPersonaLayout } from './ffmpeg-utils.js';
+import { concatenateAudio, generateSilence, generateSpeechBatch, getFileDuration, isDualPersonaLayout } from './ffmpeg-utils.js';
+import type { BatchTTSItem } from './ffmpeg-utils.js';
 import { SceneComposer } from './scene-composer.js';
 import { generateFindings, generateExpertFindings } from './report-generator.js';
 import type { FindingsMode } from './report-generator.js';
+import { generateIssueContent } from './issue-generator.js';
+import type { IssueContent } from './issue-generator.js';
 
 export interface ComposeResult {
 	videoPath: string;
 	findingsPath: string;
+	issuePath?: string;
 	sceneCount: number;
 	personas: string[];
 }
@@ -129,6 +133,7 @@ export interface CompileFromStepsOptions {
 	outputDir: string;
 	scenarioName?: string;
 	mode?: FindingsMode;
+	skipVideo?: boolean;
 	transitionSec?: number;
 	skipSubtitles?: boolean;
 }
@@ -150,6 +155,7 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 		outputDir,
 		scenarioName,
 		mode = 'simulator',
+		skipVideo = false,
 		transitionSec = 0.5,
 		skipSubtitles = true,
 	} = options;
@@ -159,6 +165,42 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 
 	if ( steps.length === 0 ) {
 		throw new Error( 'No steps found in steps.jsonl.' );
+	}
+
+	const personas = [ ...new Set( steps.map( ( s ) => s.persona ) ) ];
+
+	// Write backward-compatible action-log.jsonl for report-generator
+	writeCompatActionLog( steps, outputDir );
+
+	// Generate findings (always — this is the primary output)
+	const actionLogPath = path.join( outputDir, 'action-log.jsonl' );
+	const findingsGenerator = mode === 'expert' ? generateExpertFindings : generateFindings;
+	const findings = findingsGenerator( { actionLogPath, scenarioName } );
+	const findingsPath = path.join( outputDir, 'findings.md' );
+	fs.writeFileSync( findingsPath, findings.markdown );
+
+	// eslint-disable-next-line no-console
+	console.log( `Findings report: ${ findingsPath }` );
+
+	// Generate issue-ready content
+	const screenshotDir = path.join( outputDir, 'screenshots' );
+	const issueContent = generateIssueContent( { steps, findings, scenarioName, mode, screenshotDir } );
+	const issuePath = path.join( outputDir, 'issue.md' );
+	fs.writeFileSync( issuePath, `# ${ issueContent.title }\n\n${ issueContent.body }` );
+
+	// eslint-disable-next-line no-console
+	console.log( `Issue template: ${ issuePath } (${ issueContent.screenshots.length } screenshots)` );
+
+	if ( skipVideo ) {
+		// eslint-disable-next-line no-console
+		console.log( `Skipping video (skipVideo=true). ${ steps.length } steps, ${ personas.length } persona(s).` );
+		return {
+			videoPath: '',
+			findingsPath,
+			issuePath,
+			sceneCount: 0,
+			personas,
+		};
 	}
 
 	// Ensure at least one scene marker — auto-assign if none provided
@@ -177,18 +219,50 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 	const frameDurations = new Map< number, number >();
 	const stepAudioFiles = new Map< number, string >();
 
-	// eslint-disable-next-line no-console
-	console.log( `Compiling ${ steps.length } steps...` );
+	// Per-persona voices, written by ux_record_start (voices.json: { persona: voice })
+	let personaVoices: Record< string, string > = {};
+	const voicesPath = path.join( outputDir, 'voices.json' );
+	if ( fs.existsSync( voicesPath ) ) {
+		try {
+			personaVoices = JSON.parse( fs.readFileSync( voicesPath, 'utf8' ) );
+		} catch {
+			// eslint-disable-next-line no-console
+			console.warn( '[compile] Ignoring unparseable voices.json' );
+		}
+	}
 
+	// Build batch items for all narrated steps
+	const batchItems: Array< { stepIndex: number; item: BatchTTSItem } > = [];
 	for ( const step of steps ) {
 		if ( step.observations ) {
-			const audioFile = path.join( audioDir, `step-${ step.step }.aiff` );
-			generateSpeech( step.observations, audioFile );
-			const durationSec = getFileDuration( audioFile );
-			const durationMs = Math.round( durationSec * 1000 );
-			frameDurations.set( step.step, durationMs );
-			stepAudioFiles.set( step.step, audioFile );
+			batchItems.push( {
+				stepIndex: step.step,
+				item: {
+					text: step.observations,
+					outputPath: path.join( audioDir, `step-${ step.step }.aiff` ),
+					voice: personaVoices[ step.persona ],
+				},
+			} );
 		}
+	}
+
+	// eslint-disable-next-line no-console
+	console.log( `Compiling ${ steps.length } steps (${ batchItems.length } narrated)...` );
+
+	// Single batch call — loads model once
+	const batchResults = generateSpeechBatch( batchItems.map( ( b ) => b.item ) );
+
+	for ( let i = 0; i < batchItems.length; i++ ) {
+		const { stepIndex } = batchItems[ i ];
+		const result = batchResults[ i ];
+		if ( result.error ) {
+			// eslint-disable-next-line no-console
+			console.warn( `[compile] TTS failed for step ${ stepIndex }: ${ result.error }` );
+			continue;
+		}
+		const durationMs = Math.round( result.durationSec * 1000 );
+		frameDurations.set( stepIndex, durationMs );
+		stepAudioFiles.set( stepIndex, result.outputPath );
 	}
 
 	// eslint-disable-next-line no-console
@@ -209,7 +283,6 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 
 	// Convert to SceneSegments
 	const segments = stepLog.toSceneSegments( frameDurations );
-	const personas = [ ...new Set( steps.map( ( s ) => s.persona ) ) ];
 
 	// eslint-disable-next-line no-console
 	console.log(
@@ -258,25 +331,13 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 		// eslint-disable-next-line no-console
 		console.log( `Video composed: ${ finalPath }` );
 
-		// Write backward-compatible action-log.jsonl for report-generator
-		writeCompatActionLog( steps, outputDir );
-
-		// Generate findings
-		const actionLogPath = path.join( outputDir, 'action-log.jsonl' );
-		const findingsGenerator = mode === 'expert' ? generateExpertFindings : generateFindings;
-		const findings = findingsGenerator( { actionLogPath, scenarioName } );
-		const findingsPath = path.join( outputDir, 'findings.md' );
-		fs.writeFileSync( findingsPath, findings.markdown );
-
-		// eslint-disable-next-line no-console
-		console.log( `Findings report: ${ findingsPath }` );
-
 		// Write compile diagnostics log
 		writeCompileLog( { steps, segments, stepAudioFiles, frameDurations, duplicates }, outputDir );
 
 		return {
 			videoPath: finalPath,
 			findingsPath,
+			issuePath,
 			sceneCount: segments.length,
 			personas,
 		};
@@ -490,7 +551,7 @@ function writeCompileLog( diagnostics: CompileDiagnostics, outputDir: string ): 
 }
 
 // CLI entry point
-if ( process.argv[ 1 ] && process.argv[ 1 ].endsWith( 'compose-session.ts' ) ) {
+if ( process.argv[ 1 ] && /compose-session\.[tj]s$/.test( process.argv[ 1 ] ) ) {
 	const outputDir = process.argv[ 2 ];
 	if ( ! outputDir ) {
 		// eslint-disable-next-line no-console
@@ -504,11 +565,26 @@ if ( process.argv[ 1 ] && process.argv[ 1 ].endsWith( 'compose-session.ts' ) ) {
 		scenarioName = process.argv[ scenarioIdx + 1 ];
 	}
 
-	const result = compileFromSteps( { outputDir, scenarioName } );
-	// eslint-disable-next-line no-console
-	console.log( `\nDone! ${ result.sceneCount } scenes, ${ result.personas.length } persona(s)` );
-	// eslint-disable-next-line no-console
-	console.log( `Video: ${ result.videoPath }` );
-	// eslint-disable-next-line no-console
-	console.log( `Findings: ${ result.findingsPath }` );
+	const skipVideo = process.argv.includes( '--skip-video' );
+	const mode = process.argv.includes( '--expert' ) ? 'expert' as FindingsMode : 'simulator' as FindingsMode;
+
+	try {
+		const result = compileFromSteps( { outputDir, scenarioName, skipVideo, mode } );
+		// eslint-disable-next-line no-console
+		console.log( `\nDone! ${ result.sceneCount } scenes, ${ result.personas.length } persona(s)` );
+		// eslint-disable-next-line no-console
+		console.log( `Video: ${ result.videoPath }` );
+		// eslint-disable-next-line no-console
+		console.log( `Findings: ${ result.findingsPath }` );
+	} catch ( err ) {
+		// Surface ffmpeg stderr as text instead of a raw Buffer dump.
+		const stderr = ( err as { stderr?: Buffer } ).stderr;
+		// eslint-disable-next-line no-console
+		console.error( `\nCompile failed: ${ err instanceof Error ? err.message : String( err ) }` );
+		if ( stderr ) {
+			// eslint-disable-next-line no-console
+			console.error( `--- ffmpeg stderr (tail) ---\n${ stderr.toString().split( '\n' ).slice( -25 ).join( '\n' ) }` );
+		}
+		process.exit( 1 );
+	}
 }

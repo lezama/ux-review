@@ -6,6 +6,8 @@
  *
  * Tools: ux_record_start, ux_record_step, ux_record_compile
  */
+import * as fs from 'fs';
+import * as path from 'path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -45,6 +47,11 @@ server.setRequestHandler( ListToolsRequestSchema, async () => ( {
 						type: 'array',
 						items: { type: 'string' },
 						description: 'Persona names (e.g. ["admin", "buyer"])',
+					},
+					voices: {
+						type: 'object',
+						additionalProperties: { type: 'string' },
+						description: 'Optional persona → TTS voice map (e.g. {"admin": "Samantha", "buyer": "Daniel"}). Used at compile time.',
 					},
 				},
 				required: [ 'outputDir', 'personas' ],
@@ -109,6 +116,10 @@ server.setRequestHandler( ListToolsRequestSchema, async () => ( {
 						enum: [ 'simulator', 'expert' ],
 						description: 'Findings mode: "simulator" (default) uses positive/negative signals, "expert" classifies by review lens (IA, visual, copy, flow)',
 					},
+					skipVideo: {
+						type: 'boolean',
+						description: 'Skip TTS and video assembly — only generate findings.md. Much faster.',
+					},
 				},
 				required: [ 'outputDir' ],
 			},
@@ -153,8 +164,13 @@ server.setRequestHandler( CallToolRequestSchema, async ( request ) => {
 function handleRecordStart( args: Record< string, unknown > ) {
 	const outputDir = args.outputDir as string;
 	const personas = args.personas as string[];
+	const voices = args.voices as Record< string, string > | undefined;
 
 	stepSession = new StepRecorderSession( { outputDir, personas } );
+
+	if ( voices && Object.keys( voices ).length > 0 ) {
+		fs.writeFileSync( path.join( outputDir, 'voices.json' ), JSON.stringify( voices, null, 2 ) );
+	}
 
 	return {
 		content: [ {
@@ -199,6 +215,7 @@ function handleRecordCompile( args: Record< string, unknown > ) {
 	const outputDir = args.outputDir as string;
 	const scenarioName = args.scenarioName as string | undefined;
 	const mode = ( args.mode as FindingsMode | undefined ) ?? 'simulator';
+	const skipVideo = !! args.skipVideo;
 
 	// Finalize session if active
 	if ( stepSession ) {
@@ -206,7 +223,7 @@ function handleRecordCompile( args: Record< string, unknown > ) {
 		stepSession = null;
 	}
 
-	const result = compileFromSteps( { outputDir, scenarioName, mode } );
+	const result = compileFromSteps( { outputDir, scenarioName, mode, skipVideo } );
 
 	return {
 		content: [ {
@@ -214,6 +231,7 @@ function handleRecordCompile( args: Record< string, unknown > ) {
 			text: JSON.stringify( {
 				videoPath: result.videoPath,
 				findingsPath: result.findingsPath,
+				issuePath: result.issuePath,
 				sceneCount: result.sceneCount,
 				personas: result.personas,
 			} ),

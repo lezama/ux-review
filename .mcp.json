@@ -2,8 +2,7 @@
   "mcpServers": {
     "ux-recording": {
       "command": "node",
-      "args": ["dist/mcp-server/index.js"],
-      "cwd": "/Users/miguel/dev/a8c/ux-simulator"
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp-server/index.js"]
     },
     "chrome-devtools-2": {
       "command": "npx",
@@ -16,6 +15,16 @@
       ]
     },
     "chrome-devtools-3": {
+      "command": "npx",
+      "args": [
+        "chrome-devtools-mcp@latest",
+        "--isolated",
+        "--channel",
+        "beta",
+        "--chromeArg=--start-fullscreen"
+      ]
+    },
+    "chrome-devtools-4": {
       "command": "npx",
       "args": [
         "chrome-devtools-mcp@latest",

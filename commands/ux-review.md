@@ -106,7 +106,8 @@ Initialize the recording session with `ux_record_start`:
 ```
 ux_record_start({
   outputDir: "/tmp/ux-review-<timestamp>",
-  personas: ["admin", "buyer"]
+  personas: ["admin", "buyer"],
+  voices: { admin: "Samantha", buyer: "Daniel" }
 })
 ```
 
@@ -207,7 +208,16 @@ ux_record_compile({
 })
 ```
 
-This automatically:
+For **findings only** (no video, much faster):
+```
+ux_record_compile({
+  outputDir: "/tmp/ux-review-XXXXX",
+  scenarioName: "Feature Name UX Review",
+  skipVideo: true
+})
+```
+
+With video, this automatically:
 - Generates TTS audio from all observations (batch, not during recording)
 - Measures audio durations to set frame timing (frame duration = narration duration)
 - Assembles per-persona videos from screenshots
@@ -247,24 +257,59 @@ Duration: [X] scenes, [Y] screenshots, [Z] seconds
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Then ask: **"Want me to open the video?"**
+Then ask: **"Want me to open the video or create a Linear issue?"**
+
+### Creating a Linear Issue
+
+If the user asks for an issue, use the generated `issue.md` in the output directory:
+
+1. Read `issue.md` — it has the title, action items checklist, and key screenshots
+2. Upload up to 6 key screenshots as Linear attachments:
+   - Read each screenshot file
+   - Base64-encode it
+   - Call `mcp__linear__create_attachment` with `base64Content`, `filename`, `contentType: "image/png"`
+   - Replace the local path in the issue body with the returned URL
+3. Create the issue with `mcp__linear__save_issue`:
+   - `title`: from issue.md
+   - `description`: the issue body with screenshot URLs
+   - `team`: ask the user which team
+4. Return the issue URL
+
+### Opening the Video
 
 If yes, run:
 ```bash
 open "[video path]"
 ```
 
-## Chrome DevTools MCP Servers
+## Browser Setup
 
-The plugin requires Chrome DevTools MCP servers for browser automation:
+Two browser backends are available. Pick per review:
+
+**Claude in Chrome (`mcp__claude-in-chrome__*`) — preferred for single-persona reviews that need the user's real login** (e.g. wordpress.com flows). It drives the user's logged-in Chrome session, so there is no credential dance.
+- Call `tabs_context_mcp` first, create a tab with `tabs_create_mcp`, navigate, act.
+- Screenshots: `computer` with `action: "screenshot", save_to_disk: true` returns a JPG path on disk. Copy it to `<outputDir>/screenshots/<persona>/NNNN.jpg` and pass that path to `ux_record_step`.
+- Batch actions with `browser_batch` (act → wait → screenshot) to keep the recording rhythm fast.
+
+**Chrome DevTools MCP (`chrome-devtools-2/3/4`) — for multi-persona reviews or when a clean, logged-out profile is the point.** Each server is an isolated browser; assign one per persona. Screenshots: `take_screenshot` with `filePath` pointing straight into `<outputDir>/screenshots/<persona>/NNNN.png`.
+- If a persona must be logged in, navigate to the login page and ask the user to log in manually in that window before recording.
+
+## If the ux_record tools are missing
+
+The `ux-recording` MCP server occasionally fails to connect. **Do NOT fall back to `gif_creator` or skip recording — the narrated video is the deliverable.** The recording format is plain files; log steps with the bundled helper instead:
 
 ```bash
-# Install for each persona slot:
-claude mcp add chrome-devtools-2 -- npx chrome-devtools-mcp@latest --isolated --channel beta --chromeArg=--start-fullscreen
-claude mcp add chrome-devtools-3 -- npx chrome-devtools-mcp@latest --isolated --channel beta --chromeArg=--start-fullscreen
+node ${CLAUDE_PLUGIN_ROOT}/bin/ux-step.mjs start /tmp/ux-review-<ts> tester --voices "tester=Samantha"
+node ${CLAUDE_PLUGIN_ROOT}/bin/ux-step.mjs step /tmp/ux-review-<ts> tester \
+  /tmp/ux-review-<ts>/screenshots/tester/0000.jpg \
+  --obs "I'm on the login page." --scene login --layout full
 ```
 
-Use `chrome-devtools-2` for the first persona, `chrome-devtools-3` for the second, etc.
+Then compile with the CLI (same engine the MCP tool uses):
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/dist/compose-session.js /tmp/ux-review-<ts> --scenario "Feature Name UX Review"
+```
 
 ## Single vs Multi-Persona
 

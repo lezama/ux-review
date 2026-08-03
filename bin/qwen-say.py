@@ -32,6 +32,11 @@ VOICE_MAP = {
     "victoria": "Ryan",
     "fiona": "Ryan",
     "moira": "Ryan",
+    "admin": "Ryan",
+    "buyer": "Aiden",
+    "recipient": "Serena",
+    "user": "Ryan",
+    "tester": "Ryan",
 }
 
 VOICES = {

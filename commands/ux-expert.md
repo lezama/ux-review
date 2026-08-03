@@ -179,6 +179,16 @@ ux_record_compile({
 })
 ```
 
+For **findings only** (no video, much faster):
+```
+ux_record_compile({
+  outputDir: "/tmp/ux-expert-XXXXX",
+  scenarioName: "Feature Name Expert Review",
+  mode: "expert",
+  skipVideo: true
+})
+```
+
 This produces findings classified by review lens instead of generic positive/negative.
 
 ### Present Results
@@ -204,7 +214,23 @@ Duration: [X] scenes, [Y] screenshots, [Z] seconds
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Then ask: **"Want me to open the video?"**
+Then ask: **"Want me to open the video or create a Linear issue?"**
+
+### Creating a Linear Issue
+
+If the user asks for an issue, use the generated `issue.md` in the output directory:
+
+1. Read `issue.md` — it has the title, action items checklist, and key screenshots
+2. Upload up to 6 key screenshots as Linear attachments:
+   - Read each screenshot file
+   - Base64-encode it
+   - Call `mcp__linear__create_attachment` with `base64Content`, `filename`, `contentType: "image/png"`
+   - Replace the local path in the issue body with the returned URL
+3. Create the issue with `mcp__linear__save_issue`:
+   - `title`: from issue.md
+   - `description`: the issue body with screenshot URLs
+   - `team`: ask the user which team
+4. Return the issue URL
 
 ## Chrome DevTools MCP Servers
 
