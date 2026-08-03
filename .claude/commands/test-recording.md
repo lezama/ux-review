@@ -125,6 +125,6 @@ If a check fails:
 1. Read the error output and steps.jsonl
 2. Identify the root cause in the source code (`lib/` directory)
 3. Fix it
-4. Rebuild: `cd /Users/miguel/dev/a8c/ux-simulator && npm run build`
+4. Rebuild: `npm run build   # from the repo root`
 5. Re-run from step 2 (keep the same TESTDIR, delete the output subdir)
 6. Max 3 fix attempts — if still failing, report what's broken and stop

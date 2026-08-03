@@ -12,9 +12,9 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ActionEntry } from './action-log.js';
+import type { ActionEntry, SceneLayout } from './types.js';
 import { isDualPersonaLayout, readJSONL } from './ffmpeg-utils.js';
-import type { SceneLayout } from './narrator.js';
+
 
 interface ReportOptions {
 	actionLogPath: string;

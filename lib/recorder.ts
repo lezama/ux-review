@@ -16,7 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { StepLog } from './step-log.js';
 import type { StepEntry } from './step-log.js';
-import type { SceneLayout } from './narrator.js';
+import type { SceneLayout } from './types.js';
 
 export interface SessionStats {
 	totalFrames: number;

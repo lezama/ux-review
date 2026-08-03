@@ -1,7 +1,7 @@
 {
-  "name": "ux-simulator",
+  "name": "ux-review",
   "version": "0.3.0",
-  "description": "Standalone UX simulation and recording service for web apps",
+  "description": "Claude Code plugin for AI-driven UX reviews: scripted browser sessions, narrated video, findings report",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,5 +16,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1"
-  }
+  },
+  "license": "GPL-2.0"
 }

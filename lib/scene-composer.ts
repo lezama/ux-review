@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { Scene, SceneLayout } from './narrator.js';
+import type { Scene, SceneLayout } from './types.js';
 import {
 	concatenateAudio,
 	ENCODE_PRESET,

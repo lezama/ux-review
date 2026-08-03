@@ -5,3 +5,5 @@ dist/
 *.m4a
 *.aiff
 .recording-state/
+output/
+recordings/

@@ -4,18 +4,19 @@ AI-driven UX review agent. Interviews you to build a test script, drives browser
 
 ## Install
 
-### As a Claude Code plugin (any repo)
+### As a Claude Code plugin
 
 ```bash
-# From your project directory:
-claude plugin add /path/to/ux-simulator
+# In Claude Code:
+/plugin marketplace add lezama/ux-review
+/plugin install ux-review@ux-review-marketplace
 ```
 
-Or add to your project's `.claude/settings.json`:
-```json
-{
-  "plugins": ["/path/to/ux-simulator"]
-}
+Or from a local clone:
+
+```bash
+/plugin marketplace add /path/to/ux-review
+/plugin install ux-review@ux-review-marketplace
 ```
 
 ### Requirements
@@ -29,9 +30,8 @@ Or add to your project's `.claude/settings.json`:
 ### First-time setup
 
 ```bash
-cd /path/to/ux-simulator
+cd /path/to/ux-review
 npm install && npm run build
-chmod +x bin/record-window.sh
 ```
 
 ### Kokoro TTS (recommended)

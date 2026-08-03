@@ -1,5 +1,5 @@
 /**
- * Shared ffmpeg/ffprobe utilities used by narrator, scene-composer, and trimmer.
+ * Shared ffmpeg/ffprobe utilities used across the recording pipeline.
  */
 import { execSync } from 'child_process';
 import * as fs from 'fs';

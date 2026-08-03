@@ -7,8 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { isDualPersonaLayout, readJSONL } from './ffmpeg-utils.js';
-import type { SceneLayout } from './narrator.js';
-import type { SceneSegment } from './action-log.js';
+import type { SceneLayout, SceneSegment } from './types.js';
 
 export interface StepEntry {
 	/** Auto-incremented step number */

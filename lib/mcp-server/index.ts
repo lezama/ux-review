@@ -15,7 +15,7 @@ import {
 	ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { StepRecorderSession } from '../recorder.js';
-import type { SceneLayout } from '../narrator.js';
+import type { SceneLayout } from '../types.js';
 import { compileFromSteps } from '../compose-session.js';
 import type { FindingsMode } from '../report-generator.js';
 
