@@ -57,12 +57,13 @@ python3.11 bin/qwen-tts-server.py &   # listens on /tmp/qwen-tts.sock
 macOS voice names are mapped to Qwen speakers (Samantha → Ryan,
 Daniel → Aiden), so persona voice maps work unchanged across engines.
 
-The default checkpoint is `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice`. For higher
-quality at ~3x the size and slower generation, point `QWEN_TTS_MODEL` at the
-1.7B variant:
+The default checkpoint is `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` (~3.5 GB,
+downloaded from Hugging Face on first use). It has noticeably more natural
+pacing than the smaller variant. For a lighter/faster setup, point
+`QWEN_TTS_MODEL` at the 0.6B checkpoint:
 
 ```bash
-export QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+export QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
 ```
 
 **Kokoro (lighter alternative):**

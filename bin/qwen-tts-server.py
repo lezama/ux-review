@@ -45,7 +45,7 @@ def main():
     import subprocess
 
     model = Qwen3TTSModel.from_pretrained(
-        os.environ.get("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
+        os.environ.get("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
     )
     print("Model loaded. Listening on", sock_path, file=sys.stderr)
 
