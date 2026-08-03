@@ -85,7 +85,9 @@ def generate_direct(text, output, speaker, instruct):
     import soundfile as sf
     from qwen_tts import Qwen3TTSModel
 
-    model = Qwen3TTSModel.from_pretrained("Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
+    model = Qwen3TTSModel.from_pretrained(
+        os.environ.get("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
+    )
     wavs, sr = model.generate_custom_voice(
         text=text,
         language="English",

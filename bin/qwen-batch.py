@@ -117,7 +117,9 @@ def main():
     import numpy as np
     from qwen_tts import Qwen3TTSModel
 
-    model = Qwen3TTSModel.from_pretrained("Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
+    model = Qwen3TTSModel.from_pretrained(
+        os.environ.get("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
+    )
 
     for i in range(start_from, len(items)):
         item = items[i]
