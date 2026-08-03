@@ -17,7 +17,7 @@ import { generateSpeechBatch, isDualPersonaLayout } from './ffmpeg-utils.js';
 import { SceneComposer } from './scene-composer.js';
 import { generateFindings, generateExpertFindings } from './report-generator.js';
 import { generateIssueContent } from './issue-generator.js';
-import { buildAudioFromSteps, writeCompatActionLog, writeCompileLog } from './compile-helpers.js';
+import { buildAudioFromSteps, totalDurationMs, writeCompatActionLog, writeCompileLog } from './compile-helpers.js';
 /**
  * Build a single scene segment MP4 from its screenshot frames.
  *
@@ -82,9 +82,6 @@ function buildSceneSegment(segment, index, tmpDir) {
         }
     }
     return outputPath;
-}
-function totalDurationMs(frames) {
-    return frames.reduce((sum, f) => sum + f.durationMs, 0);
 }
 function guessSecondaryPersona(segment) {
     // For PIP layouts, the persona name is in the layout string (pip-<name>)

@@ -6,10 +6,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { SceneSegment } from './types.js';
+import { DEFAULT_FRAME_DURATION } from './step-log.js';
 import type { StepEntry } from './step-log.js';
 import { concatenateAudio, generateSilence, getFileDuration } from './ffmpeg-utils.js';
 
-function totalDurationMs( frames: Array< { durationMs: number } > ): number {
+export function totalDurationMs( frames: Array< { durationMs: number } > ): number {
 	return frames.reduce( ( sum, f ) => sum + f.durationMs, 0 );
 }
 
@@ -44,7 +45,18 @@ export function buildAudioFromSteps(
 
 	try {
 		const segmentFiles: string[] = [];
-		let silIdx = 0;
+		// Silence clips are cached by duration — un-narrated frames mostly share the default hold
+		const silenceByDuration = new Map< number, string >();
+		const silence = ( durationSec: number ): string => {
+			const key = Math.round( durationSec * 1000 );
+			let p = silenceByDuration.get( key );
+			if ( ! p ) {
+				p = path.join( tmpDir, `sil-${ key }ms.aiff` );
+				generateSilence( p, durationSec );
+				silenceByDuration.set( key, p );
+			}
+			return p;
+		};
 
 		for ( const segment of segments ) {
 			for ( const frame of segment.primaryFrames ) {
@@ -56,23 +68,19 @@ export function buildAudioFromSteps(
 				if ( audioFile && fs.existsSync( audioFile ) ) {
 					segmentFiles.push( audioFile );
 
-					// Pad if frame duration > audio duration
-					const audioDurSec = getFileDuration( audioFile );
+					// Pad if frame duration > audio duration (duration was measured by the TTS batch)
+					const audioDurSec = ( frameDurations.get( stepIdx as number ) ?? Math.round( getFileDuration( audioFile ) * 1000 ) ) / 1000;
 					const frameDurSec = frame.durationMs / 1000;
 					const gap = frameDurSec - audioDurSec;
 					if ( gap > 0.1 ) {
-						const silPath = path.join( tmpDir, `sil-${ silIdx++ }.aiff` );
-						generateSilence( silPath, gap );
-						segmentFiles.push( silPath );
+						segmentFiles.push( silence( gap ) );
 					}
 					continue;
 				}
 
 				// No narration — fill with silence
 				if ( frame.durationMs > 100 ) {
-					const silPath = path.join( tmpDir, `sil-${ silIdx++ }.aiff` );
-					generateSilence( silPath, frame.durationMs / 1000 );
-					segmentFiles.push( silPath );
+					segmentFiles.push( silence( frame.durationMs / 1000 ) );
 				}
 			}
 		}
@@ -167,7 +175,7 @@ export function writeCompileLog( diagnostics: CompileDiagnostics, outputDir: str
 			scene: step.scene ?? null,
 			hasObservations: !! step.observations,
 			audioFile: audioFile ? path.basename( audioFile ) : null,
-			durationMs: durationMs ?? 1500,
+			durationMs: durationMs ?? DEFAULT_FRAME_DURATION,
 			duplicate: duplicateSteps.has( step.step ),
 		} ) );
 	}

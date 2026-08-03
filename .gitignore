@@ -6,3 +6,7 @@ node_modules/
 .recording-state/
 output/
 recordings/
+dist/**/*.map
+dist/**/*.d.ts
+dist/mcp-server/index.js
+__pycache__/

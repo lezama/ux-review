@@ -12,82 +12,17 @@ Usage:
   qwen-say --list-voices
 """
 import argparse
-import json
-import os
-import socket
 import sys
 import warnings
 
 warnings.filterwarnings("ignore")
 
-SOCKET_PATH = "/tmp/qwen-tts.sock"
-
-# Map macOS `say` voice names to Qwen speakers
-VOICE_MAP = {
-    "samantha": "Ryan",
-    "daniel": "Aiden",
-    "karen": "Ryan",
-    "tom": "Aiden",
-    "alex": "Aiden",
-    "victoria": "Ryan",
-    "fiona": "Ryan",
-    "moira": "Ryan",
-    "admin": "Ryan",
-    "buyer": "Aiden",
-    "recipient": "Serena",
-    "user": "Ryan",
-    "tester": "Ryan",
-}
-
-VOICES = {
-    "Ryan": "English Male",
-    "Aiden": "English Male",
-}
-
-
-def try_server(text, output, speaker, instruct):
-    """Try the warm server. Returns duration on success, None on failure."""
-    if not os.path.exists(SOCKET_PATH):
-        return None
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(30)
-        sock.connect(SOCKET_PATH)
-        request = json.dumps({
-            "text": text,
-            "output": output,
-            "speaker": speaker,
-            "instruct": instruct,
-        })
-        sock.sendall(request.encode())
-        sock.shutdown(socket.SHUT_WR)
-
-        data = b""
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-        sock.close()
-
-        response = json.loads(data.decode())
-        if response.get("status") == "ok":
-            return response.get("duration", 0)
-        return None
-    except (ConnectionRefusedError, TimeoutError, OSError):
-        return None
+from qwen_common import DEFAULT_INSTRUCT, VOICE_MAP, VOICES, load_model, map_voice, try_server, write_audio
 
 
 def generate_direct(text, output, speaker, instruct):
     """Load model and generate directly (slow first call)."""
-    import subprocess
-    import numpy as np
-    import soundfile as sf
-    from qwen_tts import Qwen3TTSModel
-
-    model = Qwen3TTSModel.from_pretrained(
-        os.environ.get("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
-    )
+    model = load_model()
     wavs, sr = model.generate_custom_voice(
         text=text,
         language="English",
@@ -99,24 +34,7 @@ def generate_direct(text, output, speaker, instruct):
         print("Error: No audio generated", file=sys.stderr)
         sys.exit(1)
 
-    full_audio = wavs[0]
-    if not isinstance(full_audio, np.ndarray):
-        full_audio = np.array(full_audio)
-
-    if output.endswith(".aiff"):
-        wav_path = output.replace(".aiff", ".wav")
-        sf.write(wav_path, full_audio, sr)
-        subprocess.run(["ffmpeg", "-y", "-i", wav_path, output], capture_output=True)
-        os.remove(wav_path)
-    elif output.endswith(".mp3"):
-        wav_path = output.replace(".mp3", ".tmp.wav")
-        sf.write(wav_path, full_audio, sr)
-        subprocess.run(["ffmpeg", "-y", "-i", wav_path, "-b:a", "192k", output], capture_output=True)
-        os.remove(wav_path)
-    else:
-        sf.write(output, full_audio, sr)
-
-    return len(full_audio) / sr
+    return write_audio(wavs[0], sr, output)
 
 
 def main():
@@ -124,7 +42,7 @@ def main():
     parser.add_argument("text", nargs="*", help="Text to speak")
     parser.add_argument("-v", "--voice", default="Ryan", help="Voice name")
     parser.add_argument("-o", "--output", required=True, help="Output audio file path")
-    parser.add_argument("--instruct", default="Very cheerful and enthusiastic.",
+    parser.add_argument("--instruct", default=DEFAULT_INSTRUCT,
                         help="Emotion/style instruction")
     parser.add_argument("--list-voices", action="store_true", help="List available voices")
     args = parser.parse_args()
@@ -145,7 +63,7 @@ def main():
         print("Error: No text provided", file=sys.stderr)
         sys.exit(1)
 
-    speaker = VOICE_MAP.get(args.voice.lower(), args.voice)
+    speaker = map_voice(args.voice)
 
     # Try warm server first, fall back to direct
     duration = try_server(text, args.output, speaker, args.instruct)

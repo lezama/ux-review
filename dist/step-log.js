@@ -7,7 +7,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { isDualPersonaLayout } from './ffmpeg-utils.js';
-const DEFAULT_FRAME_DURATION = 1500;
+export const DEFAULT_FRAME_DURATION = 1500;
 const MIN_FRAME_DURATION = 300;
 /**
  * Append-only step log backed by a JSONL file.

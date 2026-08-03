@@ -29,21 +29,15 @@ export interface ActionEntry {
 	/** Which browser persona performed this action */
 	persona: string;
 	/** What was done */
-	action: 'screenshot' | 'click' | 'fill' | 'navigate' | 'wait' | 'scene' | 'narration' | 'pause' | 'resume';
+	action: 'screenshot' | 'scene' | 'narration';
 	/** Human-readable target description */
 	target?: string;
 	/** Narration text for this scene */
 	narration?: string;
 	/** Layout for video composition */
 	layout?: SceneLayout;
-	/** Hold the final frame of this scene for extra time (ms) */
-	holdMs?: number;
 	/** Relative path to the screenshot PNG (e.g., "admin/0003.png") */
 	screenshotFile?: string;
-	/** Per-frame hold duration override for pacing (ms) */
-	durationMs?: number;
-	/** Relative path to narration audio file (e.g., "audio/narr-0.aiff") */
-	audioFile?: string;
 }
 
 export interface SceneSegment {

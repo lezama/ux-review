@@ -28,7 +28,7 @@ export interface StepEntry {
 	layout?: SceneLayout;
 }
 
-const DEFAULT_FRAME_DURATION = 1500;
+export const DEFAULT_FRAME_DURATION = 1500;
 const MIN_FRAME_DURATION = 300;
 
 /**

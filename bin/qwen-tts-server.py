@@ -21,9 +21,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-SOCKET_PATH = "/tmp/qwen-tts.sock"
-DEFAULT_SPEAKER = "Ryan"
-DEFAULT_INSTRUCT = "Very cheerful and enthusiastic."
+from qwen_common import DEFAULT_INSTRUCT, DEFAULT_SPEAKER, SOCKET_PATH, load_model, write_audio
 
 
 def main():
@@ -39,14 +37,7 @@ def main():
         os.remove(sock_path)
 
     print("Loading Qwen3-TTS model...", file=sys.stderr)
-    from qwen_tts import Qwen3TTSModel
-    import soundfile as sf
-    import numpy as np
-    import subprocess
-
-    model = Qwen3TTSModel.from_pretrained(
-        os.environ.get("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
-    )
+    model = load_model()
     print("Model loaded. Listening on", sock_path, file=sys.stderr)
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -105,21 +96,7 @@ def main():
                 instruct=instruct,
             )
 
-            full_audio = wavs[0]
-            if not isinstance(full_audio, np.ndarray):
-                full_audio = np.array(full_audio)
-
-            # Write output
-            if output.endswith(".aiff"):
-                wav_path = output.replace(".aiff", ".wav")
-                sf.write(wav_path, full_audio, sr)
-                subprocess.run(["ffmpeg", "-y", "-i", wav_path, output],
-                               capture_output=True)
-                os.remove(wav_path)
-            else:
-                sf.write(output, full_audio, sr)
-
-            duration = len(full_audio) / sr
+            duration = write_audio(wavs[0], sr, output)
             response = {"status": "ok", "duration": round(duration, 3), "output": output}
             conn.sendall(json.dumps(response).encode())
             conn.close()

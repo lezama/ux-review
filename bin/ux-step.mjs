@@ -71,11 +71,13 @@ if ( command === 'start' ) {
 	if ( ! fs.existsSync( sessionPath ) ) {
 		die( `No session.json in ${ outputDir } — run "ux-step.mjs start" first` );
 	}
-	const { startTime } = JSON.parse( fs.readFileSync( sessionPath, 'utf8' ) );
+	const session = JSON.parse( fs.readFileSync( sessionPath, 'utf8' ) );
+	const { startTime } = session;
 
 	const logPath = path.join( outputDir, 'steps.jsonl' );
-	const content = fs.existsSync( logPath ) ? fs.readFileSync( logPath, 'utf8' ).trim() : '';
-	const step = content ? content.split( '\n' ).length : 0;
+	const step = session.nextStep ?? 0;
+	session.nextStep = step + 1;
+	fs.writeFileSync( sessionPath, JSON.stringify( session ) );
 
 	let verified = false;
 	try {

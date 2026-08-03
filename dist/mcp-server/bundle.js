@@ -20833,12 +20833,22 @@ var ENCODE_PRESET = "-c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p";
 var AUDIO_PRESET = "-c:a aac -b:a 128k";
 var OUTPUT_WIDTH = 1920;
 var OUTPUT_HEIGHT = 1080;
-var SCALE_PAD_FILTER = `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+function scalePadFilter(width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT) {
+  return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+}
+var SCALE_PAD_FILTER = scalePadFilter();
+var imageDimensionsCache = /* @__PURE__ */ new Map();
 function getImageDimensions(filePath) {
+  const cached2 = imageDimensionsCache.get(filePath);
+  if (cached2) {
+    return cached2;
+  }
   try {
     const result = execSync(`ffprobe -v quiet -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x ${JSON.stringify(filePath)}`, { encoding: "utf8" });
     const [w, h] = result.trim().split("x").map(Number);
-    return { width: w || 0, height: h || 0 };
+    const dims = { width: w || 0, height: h || 0 };
+    imageDimensionsCache.set(filePath, dims);
+    return dims;
   } catch {
     return { width: 0, height: 0 };
   }
@@ -20936,11 +20946,13 @@ function generateSpeechBatch(items) {
   if (engine === "qwen" && fs.existsSync(QWEN_BATCH_SCRIPT)) {
     return generateSpeechBatchQwen(items);
   }
+  return generateSpeechSequential(items);
+}
+function generateSpeechSequential(items) {
   return items.map((item) => {
     try {
       generateSpeech(item.text, item.outputPath, item.voice);
-      const durationSec = getFileDuration(item.outputPath);
-      return { outputPath: item.outputPath, durationSec };
+      return { outputPath: item.outputPath, durationSec: getFileDuration(item.outputPath) };
     } catch (err) {
       return {
         outputPath: item.outputPath,
@@ -20989,14 +21001,7 @@ function generateSpeechBatchQwen(items) {
     });
   } catch (err) {
     console.error("[batch-tts] Batch script failed, falling back to sequential:", err instanceof Error ? err.message : err);
-    return items.map((item) => {
-      try {
-        generateSpeech(item.text, item.outputPath, item.voice);
-        return { outputPath: item.outputPath, durationSec: getFileDuration(item.outputPath) };
-      } catch (e) {
-        return { outputPath: item.outputPath, durationSec: 0, error: e instanceof Error ? e.message : String(e) };
-      }
-    });
+    return generateSpeechSequential(items);
   }
 }
 function readJSONL(filePath) {
@@ -21418,15 +21423,15 @@ function buildLayoutCommand(opts) {
     const input = isSecondary ? secondaryInput : primaryInput;
     const label = isSecondary ? secondaryLabel : primaryLabel;
     const filter2 = [
-      `[0:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[scaled]`,
+      `[0:v]${scalePadFilter()},setpts=PTS-STARTPTS[scaled]`,
       `[scaled]drawtext=text='${capitalize(label)}':${labelStyle}:x=40:y=40[out]`
     ].join("; ");
     return `ffmpeg ${input} -filter_complex "${filter2}" -map "[out]" ${outputArgs}`;
   }
   if (layout === "split") {
     const filter2 = [
-      `[0:v]scale=960:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=960:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[left]`,
-      `[1:v]scale=960:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=960:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[right]`,
+      `[0:v]${scalePadFilter(960)},setpts=PTS-STARTPTS[left]`,
+      `[1:v]${scalePadFilter(960)},setpts=PTS-STARTPTS[right]`,
       `[left][right]hstack=inputs=2[combined]`,
       `[combined]drawtext=text='${capitalize(primaryLabel)}':${labelStyle}:x=40:y=40[labeled1]`,
       `[labeled1]drawtext=text='${capitalize(secondaryLabel)}':${labelStyle}:x=1000:y=40[out]`
@@ -21436,8 +21441,8 @@ function buildLayoutCommand(opts) {
   if (layout.startsWith("pip-")) {
     const pipX = OUTPUT_WIDTH - PIP_WIDTH - PIP_MARGIN;
     const filter2 = [
-      `[0:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[main]`,
-      `[1:v]scale=${PIP_WIDTH}:${PIP_HEIGHT},setpts=PTS-STARTPTS[pip]`,
+      `[0:v]${scalePadFilter()},setpts=PTS-STARTPTS[main]`,
+      `[1:v]scale=${PIP_WIDTH}:${PIP_HEIGHT},setsar=1,setpts=PTS-STARTPTS[pip]`,
       `[main][pip]overlay=${pipX}:${PIP_MARGIN}[combined]`,
       `[combined]drawtext=text='${capitalize(primaryLabel)}':${labelStyle}:x=40:y=40[labeled1]`,
       `[labeled1]drawtext=text='${capitalize(secondaryLabel)}':${labelStyle}:x=${pipX + 10}:y=${PIP_MARGIN + PIP_HEIGHT + 5}[out]`
@@ -21445,7 +21450,7 @@ function buildLayoutCommand(opts) {
     return `ffmpeg ${primaryInput} ${secondaryInput} -filter_complex "${filter2}" -map "[out]" ${outputArgs}`;
   }
   const filter = [
-    `[0:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[scaled]`,
+    `[0:v]${scalePadFilter()},setpts=PTS-STARTPTS[scaled]`,
     `[scaled]drawtext=text='${capitalize(primaryLabel)}':${labelStyle}:x=40:y=40[out]`
   ].join("; ");
   return `ffmpeg ${primaryInput} -filter_complex "${filter}" -map "[out]" ${outputArgs}`;
@@ -21952,27 +21957,33 @@ function buildAudioFromSteps(steps, segments, stepAudioFiles, frameDurations, ou
   fs8.mkdirSync(tmpDir, { recursive: true });
   try {
     const segmentFiles = [];
-    let silIdx = 0;
+    const silenceByDuration = /* @__PURE__ */ new Map();
+    const silence = (durationSec) => {
+      const key = Math.round(durationSec * 1e3);
+      let p = silenceByDuration.get(key);
+      if (!p) {
+        p = path7.join(tmpDir, `sil-${key}ms.aiff`);
+        generateSilence(p, durationSec);
+        silenceByDuration.set(key, p);
+      }
+      return p;
+    };
     for (const segment of segments) {
       for (const frame of segment.primaryFrames) {
         const stepIdx = fileToStep.get(frame.file);
         const audioFile = stepIdx !== void 0 ? stepAudioFiles.get(stepIdx) : void 0;
         if (audioFile && fs8.existsSync(audioFile)) {
           segmentFiles.push(audioFile);
-          const audioDurSec = getFileDuration(audioFile);
+          const audioDurSec = (frameDurations.get(stepIdx) ?? Math.round(getFileDuration(audioFile) * 1e3)) / 1e3;
           const frameDurSec = frame.durationMs / 1e3;
           const gap = frameDurSec - audioDurSec;
           if (gap > 0.1) {
-            const silPath = path7.join(tmpDir, `sil-${silIdx++}.aiff`);
-            generateSilence(silPath, gap);
-            segmentFiles.push(silPath);
+            segmentFiles.push(silence(gap));
           }
           continue;
         }
         if (frame.durationMs > 100) {
-          const silPath = path7.join(tmpDir, `sil-${silIdx++}.aiff`);
-          generateSilence(silPath, frame.durationMs / 1e3);
-          segmentFiles.push(silPath);
+          segmentFiles.push(silence(frame.durationMs / 1e3));
         }
       }
     }
@@ -22036,7 +22047,7 @@ function writeCompileLog(diagnostics, outputDir) {
       scene: step.scene ?? null,
       hasObservations: !!step.observations,
       audioFile: audioFile ? path7.basename(audioFile) : null,
-      durationMs: durationMs ?? 1500,
+      durationMs: durationMs ?? DEFAULT_FRAME_DURATION,
       duplicate: duplicateSteps.has(step.step)
     }));
   }
@@ -22108,7 +22119,7 @@ function buildSceneSegment(segment, index, tmpDir) {
       narration: segment.narration,
       speaker: primaryPersona,
       startMs: 0,
-      endMs: totalDurationMs2(segment.primaryFrames),
+      endMs: totalDurationMs(segment.primaryFrames),
       holdMs: segment.holdMs
     }],
     personaVideos: {
@@ -22126,9 +22137,6 @@ function buildSceneSegment(segment, index, tmpDir) {
     }
   }
   return outputPath;
-}
-function totalDurationMs2(frames) {
-  return frames.reduce((sum, f) => sum + f.durationMs, 0);
 }
 function guessSecondaryPersona(segment) {
   if (segment.layout.startsWith("pip-")) {
@@ -22229,7 +22237,7 @@ ${issueContent.body}`);
   let cumulativeMs = 0;
   const scenes = segments.map((seg) => {
     const startMs = cumulativeMs;
-    const segDuration = totalDurationMs2(seg.primaryFrames);
+    const segDuration = totalDurationMs(seg.primaryFrames);
     cumulativeMs += segDuration;
     return {
       name: seg.name,
@@ -22302,7 +22310,7 @@ ${stderr.toString().split("\n").slice(-25).join("\n")}`);
 
 // dist/mcp-server/index.js
 var stepSession = null;
-var server = new Server({ name: "ux-recording", version: "0.3.0" }, { capabilities: { tools: {} } });
+var server = new Server({ name: "ux-recording", version: "0.3.2" }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {

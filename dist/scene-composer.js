@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { concatenateAudio, ENCODE_PRESET, AUDIO_PRESET, formatSRTTime, generateSilence, generateSpeech, getFileDuration, OUTPUT_HEIGHT, OUTPUT_WIDTH, } from './ffmpeg-utils.js';
+import { concatenateAudio, ENCODE_PRESET, AUDIO_PRESET, formatSRTTime, scalePadFilter, generateSilence, generateSpeech, getFileDuration, OUTPUT_WIDTH, } from './ffmpeg-utils.js';
 const PIP_WIDTH = 480;
 const PIP_HEIGHT = 270;
 const PIP_MARGIN = 20;
@@ -145,15 +145,15 @@ function buildLayoutCommand(opts) {
         const input = isSecondary ? secondaryInput : primaryInput;
         const label = isSecondary ? secondaryLabel : primaryLabel;
         const filter = [
-            `[0:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[scaled]`,
+            `[0:v]${scalePadFilter()},setpts=PTS-STARTPTS[scaled]`,
             `[scaled]drawtext=text='${capitalize(label)}':${labelStyle}:x=40:y=40[out]`,
         ].join('; ');
         return `ffmpeg ${input} -filter_complex "${filter}" -map "[out]" ${outputArgs}`;
     }
     if (layout === 'split') {
         const filter = [
-            `[0:v]scale=960:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=960:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[left]`,
-            `[1:v]scale=960:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=960:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[right]`,
+            `[0:v]${scalePadFilter(960)},setpts=PTS-STARTPTS[left]`,
+            `[1:v]${scalePadFilter(960)},setpts=PTS-STARTPTS[right]`,
             `[left][right]hstack=inputs=2[combined]`,
             `[combined]drawtext=text='${capitalize(primaryLabel)}':${labelStyle}:x=40:y=40[labeled1]`,
             `[labeled1]drawtext=text='${capitalize(secondaryLabel)}':${labelStyle}:x=1000:y=40[out]`,
@@ -164,8 +164,8 @@ function buildLayoutCommand(opts) {
         // pip-<name>: <name> is the small overlay, other is full
         const pipX = OUTPUT_WIDTH - PIP_WIDTH - PIP_MARGIN;
         const filter = [
-            `[0:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[main]`,
-            `[1:v]scale=${PIP_WIDTH}:${PIP_HEIGHT},setpts=PTS-STARTPTS[pip]`,
+            `[0:v]${scalePadFilter()},setpts=PTS-STARTPTS[main]`,
+            `[1:v]scale=${PIP_WIDTH}:${PIP_HEIGHT},setsar=1,setpts=PTS-STARTPTS[pip]`,
             `[main][pip]overlay=${pipX}:${PIP_MARGIN}[combined]`,
             `[combined]drawtext=text='${capitalize(primaryLabel)}':${labelStyle}:x=40:y=40[labeled1]`,
             `[labeled1]drawtext=text='${capitalize(secondaryLabel)}':${labelStyle}:x=${pipX + 10}:y=${PIP_MARGIN + PIP_HEIGHT + 5}[out]`,
@@ -174,7 +174,7 @@ function buildLayoutCommand(opts) {
     }
     // Default: treat as full-screen primary
     const filter = [
-        `[0:v]scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[scaled]`,
+        `[0:v]${scalePadFilter()},setpts=PTS-STARTPTS[scaled]`,
         `[scaled]drawtext=text='${capitalize(primaryLabel)}':${labelStyle}:x=40:y=40[out]`,
     ].join('; ');
     return `ffmpeg ${primaryInput} -filter_complex "${filter}" -map "[out]" ${outputArgs}`;

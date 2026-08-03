@@ -13,16 +13,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { SceneSegment } from './types.js';
 import { StepLog } from './step-log.js';
-import type { StepEntry } from './step-log.js';
 import { assembleFrames } from './frame-assembler.js';
-import { concatenateAudio, generateSilence, generateSpeechBatch, getFileDuration, isDualPersonaLayout } from './ffmpeg-utils.js';
+import { generateSpeechBatch, isDualPersonaLayout } from './ffmpeg-utils.js';
 import type { BatchTTSItem } from './ffmpeg-utils.js';
 import { SceneComposer } from './scene-composer.js';
 import { generateFindings, generateExpertFindings } from './report-generator.js';
 import type { FindingsMode } from './report-generator.js';
 import { generateIssueContent } from './issue-generator.js';
-import { buildAudioFromSteps, writeCompatActionLog, writeCompileLog } from './compile-helpers.js';
-import type { IssueContent } from './issue-generator.js';
+import { buildAudioFromSteps, totalDurationMs, writeCompatActionLog, writeCompileLog } from './compile-helpers.js';
 
 export interface ComposeResult {
 	videoPath: string;
@@ -112,11 +110,6 @@ function buildSceneSegment(
 	return outputPath;
 }
 
-function totalDurationMs(
-	frames: Array< { durationMs: number } >
-): number {
-	return frames.reduce( ( sum, f ) => sum + f.durationMs, 0 );
-}
 
 function guessSecondaryPersona( segment: SceneSegment ): string {
 	// For PIP layouts, the persona name is in the layout string (pip-<name>)
@@ -367,7 +360,7 @@ if ( process.argv[ 1 ] && /compose-session\.[tj]s$/.test( process.argv[ 1 ] ) ) 
 	}
 
 	const skipVideo = process.argv.includes( '--skip-video' );
-	const mode = process.argv.includes( '--expert' ) ? 'expert' as FindingsMode : 'simulator' as FindingsMode;
+	const mode: FindingsMode = process.argv.includes( '--expert' ) ? 'expert' : 'simulator';
 
 	try {
 		const result = compileFromSteps( { outputDir, scenarioName, skipVideo, mode } );

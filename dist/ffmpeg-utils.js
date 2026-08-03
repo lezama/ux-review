@@ -10,16 +10,31 @@ export const AUDIO_PRESET = '-c:a aac -b:a 128k';
 /** Standard output resolution. */
 export const OUTPUT_WIDTH = 1920;
 export const OUTPUT_HEIGHT = 1080;
-/** Scale-and-pad filter to normalize frames to OUTPUT_WIDTH x OUTPUT_HEIGHT. */
-export const SCALE_PAD_FILTER = `scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,pad=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+/**
+ * Scale-and-pad filter that normalizes frames to the given box and forces
+ * SAR 1:1. Every branch that feeds concat/xfade/hstack must use this (or
+ * append its own setsar=1) — mixed SARs make those filters reject the input.
+ */
+export function scalePadFilter(width = OUTPUT_WIDTH, height = OUTPUT_HEIGHT) {
+    return `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+}
+/** Scale-and-pad filter at the default output size. */
+export const SCALE_PAD_FILTER = scalePadFilter();
 /**
  * Get the pixel dimensions of an image file via ffprobe.
  */
+const imageDimensionsCache = new Map();
 export function getImageDimensions(filePath) {
+    const cached = imageDimensionsCache.get(filePath);
+    if (cached) {
+        return cached;
+    }
     try {
         const result = execSync(`ffprobe -v quiet -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x ${JSON.stringify(filePath)}`, { encoding: 'utf8' });
         const [w, h] = result.trim().split('x').map(Number);
-        return { width: w || 0, height: h || 0 };
+        const dims = { width: w || 0, height: h || 0 };
+        imageDimensionsCache.set(filePath, dims);
+        return dims;
     }
     catch {
         return { width: 0, height: 0 };
@@ -170,11 +185,13 @@ export function generateSpeechBatch(items) {
         return generateSpeechBatchQwen(items);
     }
     // Fallback: sequential generation (kokoro, say)
+    return generateSpeechSequential(items);
+}
+function generateSpeechSequential(items) {
     return items.map((item) => {
         try {
             generateSpeech(item.text, item.outputPath, item.voice);
-            const durationSec = getFileDuration(item.outputPath);
-            return { outputPath: item.outputPath, durationSec };
+            return { outputPath: item.outputPath, durationSec: getFileDuration(item.outputPath) };
         }
         catch (err) {
             return {
@@ -229,15 +246,7 @@ function generateSpeechBatchQwen(items) {
     catch (err) {
         // eslint-disable-next-line no-console
         console.error('[batch-tts] Batch script failed, falling back to sequential:', err instanceof Error ? err.message : err);
-        return items.map((item) => {
-            try {
-                generateSpeech(item.text, item.outputPath, item.voice);
-                return { outputPath: item.outputPath, durationSec: getFileDuration(item.outputPath) };
-            }
-            catch (e) {
-                return { outputPath: item.outputPath, durationSec: 0, error: e instanceof Error ? e.message : String(e) };
-            }
-        });
+        return generateSpeechSequential(items);
     }
 }
 /**

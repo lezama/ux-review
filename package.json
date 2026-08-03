@@ -1,6 +1,6 @@
 {
   "name": "ux-review",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "description": "Claude Code plugin for AI-driven UX reviews: scripted browser sessions, narrated video, findings report",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "tsc && npm run bundle",
     "typecheck": "tsc --noEmit",
     "compose": "node --loader ts-node/esm lib/compose-session.ts",
-    "mcp-server": "node dist/mcp-server/index.js",
+    "mcp-server": "node dist/mcp-server/bundle.js",
     "bundle": "esbuild dist/mcp-server/index.js --bundle --platform=node --target=node20 --format=esm --outfile=dist/mcp-server/bundle.js --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\""
   },
   "devDependencies": {

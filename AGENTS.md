@@ -46,9 +46,9 @@ installs, `say` always works.
 pip3.11 install qwen-tts torch soundfile
 ```
 
-The first compile downloads the `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` model
-from Hugging Face and loads it once per batch (~20s warmup). For faster
-iteration, keep the model warm in a local server:
+The first compile downloads the default checkpoint from Hugging Face and
+loads it once per batch (~20s warmup). For faster iteration, keep the model
+warm in a local server:
 
 ```bash
 python3.11 bin/qwen-tts-server.py &   # listens on /tmp/qwen-tts.sock
