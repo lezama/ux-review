@@ -20892,7 +20892,13 @@ function formatSRTTime(ms) {
 function isDualPersonaLayout(layout) {
   return layout === "split" || layout.startsWith("pip-");
 }
-var BIN_DIR = new URL("../bin/", import.meta.url).pathname;
+var BIN_DIR = (() => {
+  const candidates = [
+    new URL("../bin/", import.meta.url).pathname,
+    new URL("../../bin/", import.meta.url).pathname
+  ];
+  return candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
+})();
 var QWEN_SCRIPT = BIN_DIR + "qwen-say.py";
 var QWEN_BATCH_SCRIPT = BIN_DIR + "qwen-batch.py";
 var KOKORO_SCRIPT = BIN_DIR + "kokoro-say.py";
@@ -22310,7 +22316,7 @@ ${stderr.toString().split("\n").slice(-25).join("\n")}`);
 
 // dist/mcp-server/index.js
 var stepSession = null;
-var server = new Server({ name: "ux-recording", version: "0.3.2" }, { capabilities: { tools: {} } });
+var server = new Server({ name: "ux-recording", version: "0.3.3" }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {

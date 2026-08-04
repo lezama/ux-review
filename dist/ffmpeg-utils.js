@@ -101,7 +101,15 @@ export function isDualPersonaLayout(layout) {
     return layout === 'split' || layout.startsWith('pip-');
 }
 /** Path to TTS wrapper scripts. */
-const BIN_DIR = new URL('../bin/', import.meta.url).pathname;
+// Resolve bin/ whether this code runs from dist/*.js ('../bin/') or from the
+// esbuild bundle at dist/mcp-server/bundle.js ('../../bin/').
+const BIN_DIR = (() => {
+    const candidates = [
+        new URL('../bin/', import.meta.url).pathname,
+        new URL('../../bin/', import.meta.url).pathname,
+    ];
+    return candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
+})();
 const QWEN_SCRIPT = BIN_DIR + 'qwen-say.py';
 const QWEN_BATCH_SCRIPT = BIN_DIR + 'qwen-batch.py';
 const KOKORO_SCRIPT = BIN_DIR + 'kokoro-say.py';

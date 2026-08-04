@@ -22,7 +22,7 @@ import type { FindingsMode } from '../report-generator.js';
 let stepSession: StepRecorderSession | null = null;
 
 const server = new Server(
-	{ name: 'ux-recording', version: '0.3.2' },
+	{ name: 'ux-recording', version: '0.3.3' },
 	{ capabilities: { tools: {} } }
 );
 
