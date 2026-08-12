@@ -240,6 +240,19 @@ Same as `/ux-review` — uses `chrome-devtools-2`, `chrome-devtools-3`, etc.
 
 **Step-based (preferred):** `ux_record_start` → `ux_record_step` (×N) → `ux_record_compile` (with `mode: "expert"`)
 
+## If the ux_record tools are missing or the compile times out
+
+The narrated video is the deliverable, so do not fall back to a GIF or skip recording. Log steps with the bundled helper and compile with the CLI, which is the same engine the MCP tool uses:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/bin/ux-step.mjs start /tmp/ux-expert-<ts> reviewer --voices "reviewer=Samantha"
+node ${CLAUDE_PLUGIN_ROOT}/dist/compose-session.js /tmp/ux-expert-<ts> --scenario "Feature Name Expert Review" --expert
+```
+
+**Pass `--expert`, not `mode: "expert"`.** The MCP tool takes `mode` as a parameter; the CLI takes the `--expert` flag. Its full set is `--scenario "name"`, `--expert` and `--skip-video`; anything else is rejected.
+
+A compile of 30-odd narrated steps runs for tens of minutes, most of it TTS. That is expected, not a hang.
+
 ## Single vs Multi-Persona
 
 Same layout rules as `/ux-review`: `full` | `split` | `pip-<name>`.

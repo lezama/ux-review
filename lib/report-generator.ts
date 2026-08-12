@@ -299,16 +299,35 @@ function classifyAndReport( options: {
 			workedWell.push( line );
 		}
 
-		for ( const rule of options.rules ) {
-			if ( rule.pattern.test( text ) && ( ! rule.excludePositive || ! isPositive ) ) {
-				buckets[ rule.key ].push( line );
+		// One observation, one lens. Testing every rule independently used to
+		// file the same observation under several lenses at once, which
+		// padded the report and made one finding look like three. Rules are
+		// declared in priority order, so the first match is the right one.
+		const matched = options.rules.find(
+			( rule ) => ! ( rule.excludePositive && isPositive ) && rule.pattern.test( text )
+		);
+		if ( matched ) {
+			buckets[ matched.key ].push( line );
+			// A positive note is not also a friction point. Listing it as both
+			// is how the worst finding of a run once appeared under what
+			// worked well.
+			if ( ! isPositive ) {
 				frictionPoints.push( line );
 			}
 		}
 	}
 
 	const uniqueFriction = [ ...new Set( frictionPoints ) ];
-	const suggestions = uniqueFriction.map( ( fp ) => `Review: ${ fp.slice( 0, 120 ) }` );
+	// Cut on a word boundary. Slicing at a fixed width left every suggestion
+	// ending mid-word, which read like the report itself was broken.
+	const suggestions = uniqueFriction.map( ( fp ) => {
+		if ( fp.length <= 160 ) {
+			return fp;
+		}
+		const cut = fp.slice( 0, 160 );
+		const lastSpace = cut.lastIndexOf( ' ' );
+		return `${ cut.slice( 0, lastSpace > 0 ? lastSpace : 160 ) }…`;
+	} );
 	const sections = options.buildSections( buckets, workedWell, suggestions );
 
 	const lines: string[] = [];

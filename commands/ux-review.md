@@ -311,6 +311,8 @@ Then compile with the CLI (same engine the MCP tool uses):
 node ${CLAUDE_PLUGIN_ROOT}/dist/compose-session.js /tmp/ux-review-<ts> --scenario "Feature Name UX Review"
 ```
 
+The CLI takes `--scenario "name"`, `--expert` and `--skip-video`, and nothing else. Note the spelling differs from the MCP tool: findings mode is the `--expert` flag here, not `mode: "expert"`.
+
 ## Single vs Multi-Persona
 
 **Single persona** (most common): One browser, `full` layout throughout, simpler composition.

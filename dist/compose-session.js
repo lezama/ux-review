@@ -103,7 +103,14 @@ function guessSecondaryPersona(segment) {
  * 8. Generate findings.md
  */
 export function compileFromSteps(options) {
-    const { outputDir, scenarioName, mode = 'simulator', skipVideo = false, transitionSec = 0.5, skipSubtitles = true, } = options;
+    const { outputDir, scenarioName, mode = 'simulator', skipVideo = false, transitionSec = 0.5, skipSubtitles = true, onProgress, } = options;
+    const report = (message) => {
+        // stderr, not stdout. The MCP server calls this in-process over a
+        // stdio transport, where stdout carries the JSON-RPC frames.
+        // eslint-disable-next-line no-console
+        console.error(message);
+        onProgress?.(message);
+    };
     const stepLog = StepLog.loadFromDirectory(outputDir);
     const steps = stepLog.getEntries();
     if (steps.length === 0) {
@@ -119,17 +126,17 @@ export function compileFromSteps(options) {
     const findingsPath = path.join(outputDir, 'findings.md');
     fs.writeFileSync(findingsPath, findings.markdown);
     // eslint-disable-next-line no-console
-    console.log(`Findings report: ${findingsPath}`);
+    console.error(`Findings report: ${findingsPath}`);
     // Generate issue-ready content
     const screenshotDir = path.join(outputDir, 'screenshots');
     const issueContent = generateIssueContent({ steps, findings, scenarioName, mode, screenshotDir });
     const issuePath = path.join(outputDir, 'issue.md');
     fs.writeFileSync(issuePath, `# ${issueContent.title}\n\n${issueContent.body}`);
     // eslint-disable-next-line no-console
-    console.log(`Issue template: ${issuePath} (${issueContent.screenshots.length} screenshots)`);
+    console.error(`Issue template: ${issuePath} (${issueContent.screenshots.length} screenshots)`);
     if (skipVideo) {
         // eslint-disable-next-line no-console
-        console.log(`Skipping video (skipVideo=true). ${steps.length} steps, ${personas.length} persona(s).`);
+        console.error(`Skipping video (skipVideo=true). ${steps.length} steps, ${personas.length} persona(s).`);
         return {
             videoPath: '',
             findingsPath,
@@ -177,10 +184,11 @@ export function compileFromSteps(options) {
             });
         }
     }
-    // eslint-disable-next-line no-console
-    console.log(`Compiling ${steps.length} steps (${batchItems.length} narrated)...`);
+    report(`Compiling ${steps.length} steps (${batchItems.length} narrated)...`);
     // Single batch call — loads model once
+    report(`Generating ${batchItems.length} narration clips…`);
     const batchResults = generateSpeechBatch(batchItems.map((b) => b.item));
+    report(`Narration done. Assembling video…`);
     for (let i = 0; i < batchItems.length; i++) {
         const { stepIndex } = batchItems[i];
         const result = batchResults[i];
@@ -194,7 +202,7 @@ export function compileFromSteps(options) {
         stepAudioFiles.set(stepIndex, result.outputPath);
     }
     // eslint-disable-next-line no-console
-    console.log(`TTS generated for ${stepAudioFiles.size} narrated steps`);
+    console.error(`TTS generated for ${stepAudioFiles.size} narrated steps`);
     // Detect duplicate screenshots
     const duplicates = [];
     for (let i = 1; i < steps.length; i++) {
@@ -209,7 +217,7 @@ export function compileFromSteps(options) {
     // Convert to SceneSegments
     const segments = stepLog.toSceneSegments(frameDurations);
     // eslint-disable-next-line no-console
-    console.log(`Composing ${segments.length} scenes for ${personas.length} persona(s): ${personas.join(', ')}`);
+    console.error(`Composing ${segments.length} scenes for ${personas.length} persona(s): ${personas.join(', ')}`);
     // Build audio track aligned to video frames
     const audioPath = buildAudioFromSteps(steps, segments, stepAudioFiles, frameDurations, outputDir);
     // Build scenes for SceneComposer (needs startMs/endMs)
@@ -231,8 +239,12 @@ export function compileFromSteps(options) {
     fs.mkdirSync(tmpDir, { recursive: true });
     try {
         // Build per-scene segment MP4s
-        const scenePaths = segments.map((segment, i) => buildSceneSegment(segment, i, tmpDir));
+        const scenePaths = segments.map((segment, i) => {
+            report(`Encoding scene ${i + 1}/${segments.length}…`);
+            return buildSceneSegment(segment, i, tmpDir);
+        });
         const finalPath = path.join(outputDir, 'composed-final.mp4');
+        report('Composing the final video…');
         SceneComposer.composeFromSegments({
             scenePaths,
             scenes,
@@ -242,7 +254,7 @@ export function compileFromSteps(options) {
             audioPath: audioPath ?? undefined,
         });
         // eslint-disable-next-line no-console
-        console.log(`Video composed: ${finalPath}`);
+        console.error(`Video composed: ${finalPath}`);
         // Write compile diagnostics log
         writeCompileLog({ steps, segments, stepAudioFiles, frameDurations, duplicates }, outputDir);
         return {
@@ -267,13 +279,36 @@ if (process.argv[1] && /compose-session\.[tj]s$/.test(process.argv[1])) {
     const outputDir = process.argv[2];
     if (!outputDir) {
         // eslint-disable-next-line no-console
-        console.error('Usage: compose-session.ts <output-dir> [--scenario "name"]');
+        console.error('Usage: compose-session.ts <output-dir> [--scenario "name"] [--expert] [--skip-video]');
         process.exit(1);
     }
     let scenarioName;
     const scenarioIdx = process.argv.indexOf('--scenario');
     if (scenarioIdx !== -1 && process.argv[scenarioIdx + 1]) {
         scenarioName = process.argv[scenarioIdx + 1];
+    }
+    // Reject anything we do not understand. Unknown flags used to be ignored
+    // in silence, so `--mode expert` (the MCP spelling) quietly produced a
+    // simulator report and there was no way to tell from the output.
+    const KNOWN_FLAGS = ['--scenario', '--skip-video', '--expert'];
+    const unknown = [];
+    for (let i = 3; i < process.argv.length; i++) {
+        const arg = process.argv[i];
+        if (arg === '--scenario') {
+            // Skip its value, which may itself start with dashes.
+            i++;
+            continue;
+        }
+        if (arg.startsWith('--') && !KNOWN_FLAGS.includes(arg)) {
+            unknown.push(arg);
+        }
+    }
+    if (unknown.length) {
+        // eslint-disable-next-line no-console
+        console.error(`Unknown option(s): ${unknown.join(', ')}\n` +
+            `Usage: compose-session.ts <output-dir> [--scenario "name"] [--expert] [--skip-video]\n` +
+            `Note: the expert findings mode is --expert here; "mode: expert" is the MCP tool spelling.`);
+        process.exit(1);
     }
     const skipVideo = process.argv.includes('--skip-video');
     const mode = process.argv.includes('--expert') ? 'expert' : 'simulator';

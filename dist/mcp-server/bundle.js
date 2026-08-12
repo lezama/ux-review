@@ -21745,15 +21745,23 @@ function classifyAndReport(options) {
     if (isPositive) {
       workedWell.push(line);
     }
-    for (const rule of options.rules) {
-      if (rule.pattern.test(text) && (!rule.excludePositive || !isPositive)) {
-        buckets[rule.key].push(line);
+    const matched = options.rules.find((rule) => !(rule.excludePositive && isPositive) && rule.pattern.test(text));
+    if (matched) {
+      buckets[matched.key].push(line);
+      if (!isPositive) {
         frictionPoints.push(line);
       }
     }
   }
   const uniqueFriction = [...new Set(frictionPoints)];
-  const suggestions = uniqueFriction.map((fp) => `Review: ${fp.slice(0, 120)}`);
+  const suggestions = uniqueFriction.map((fp) => {
+    if (fp.length <= 160) {
+      return fp;
+    }
+    const cut = fp.slice(0, 160);
+    const lastSpace = cut.lastIndexOf(" ");
+    return `${cut.slice(0, lastSpace > 0 ? lastSpace : 160)}\u2026`;
+  });
   const sections = options.buildSections(buckets, workedWell, suggestions);
   const lines = [];
   lines.push(`## ${options.title}`);
@@ -22151,7 +22159,11 @@ function guessSecondaryPersona(segment) {
   return "secondary";
 }
 function compileFromSteps(options) {
-  const { outputDir, scenarioName, mode = "simulator", skipVideo = false, transitionSec = 0.5, skipSubtitles = true } = options;
+  const { outputDir, scenarioName, mode = "simulator", skipVideo = false, transitionSec = 0.5, skipSubtitles = true, onProgress } = options;
+  const report = (message) => {
+    console.error(message);
+    onProgress?.(message);
+  };
   const stepLog = StepLog.loadFromDirectory(outputDir);
   const steps = stepLog.getEntries();
   if (steps.length === 0) {
@@ -22164,16 +22176,16 @@ function compileFromSteps(options) {
   const findings = findingsGenerator({ actionLogPath, scenarioName });
   const findingsPath = path8.join(outputDir, "findings.md");
   fs9.writeFileSync(findingsPath, findings.markdown);
-  console.log(`Findings report: ${findingsPath}`);
+  console.error(`Findings report: ${findingsPath}`);
   const screenshotDir = path8.join(outputDir, "screenshots");
   const issueContent = generateIssueContent({ steps, findings, scenarioName, mode, screenshotDir });
   const issuePath = path8.join(outputDir, "issue.md");
   fs9.writeFileSync(issuePath, `# ${issueContent.title}
 
 ${issueContent.body}`);
-  console.log(`Issue template: ${issuePath} (${issueContent.screenshots.length} screenshots)`);
+  console.error(`Issue template: ${issuePath} (${issueContent.screenshots.length} screenshots)`);
   if (skipVideo) {
-    console.log(`Skipping video (skipVideo=true). ${steps.length} steps, ${personas.length} persona(s).`);
+    console.error(`Skipping video (skipVideo=true). ${steps.length} steps, ${personas.length} persona(s).`);
     return {
       videoPath: "",
       findingsPath,
@@ -22214,8 +22226,10 @@ ${issueContent.body}`);
       });
     }
   }
-  console.log(`Compiling ${steps.length} steps (${batchItems.length} narrated)...`);
+  report(`Compiling ${steps.length} steps (${batchItems.length} narrated)...`);
+  report(`Generating ${batchItems.length} narration clips\u2026`);
   const batchResults = generateSpeechBatch(batchItems.map((b) => b.item));
+  report(`Narration done. Assembling video\u2026`);
   for (let i = 0; i < batchItems.length; i++) {
     const { stepIndex } = batchItems[i];
     const result = batchResults[i];
@@ -22227,7 +22241,7 @@ ${issueContent.body}`);
     frameDurations.set(stepIndex, durationMs);
     stepAudioFiles.set(stepIndex, result.outputPath);
   }
-  console.log(`TTS generated for ${stepAudioFiles.size} narrated steps`);
+  console.error(`TTS generated for ${stepAudioFiles.size} narrated steps`);
   const duplicates = [];
   for (let i = 1; i < steps.length; i++) {
     if (steps[i].screenshot === steps[i - 1].screenshot) {
@@ -22238,7 +22252,7 @@ ${issueContent.body}`);
     console.warn(`[compile] ${duplicates.length} duplicate screenshot(s) detected:`, duplicates.map((d) => `step ${d.step} (${d.screenshot})`).join(", "));
   }
   const segments = stepLog.toSceneSegments(frameDurations);
-  console.log(`Composing ${segments.length} scenes for ${personas.length} persona(s): ${personas.join(", ")}`);
+  console.error(`Composing ${segments.length} scenes for ${personas.length} persona(s): ${personas.join(", ")}`);
   const audioPath = buildAudioFromSteps(steps, segments, stepAudioFiles, frameDurations, outputDir);
   let cumulativeMs = 0;
   const scenes = segments.map((seg) => {
@@ -22257,8 +22271,12 @@ ${issueContent.body}`);
   const tmpDir = path8.join(outputDir, ".compose-tmp");
   fs9.mkdirSync(tmpDir, { recursive: true });
   try {
-    const scenePaths = segments.map((segment, i) => buildSceneSegment(segment, i, tmpDir));
+    const scenePaths = segments.map((segment, i) => {
+      report(`Encoding scene ${i + 1}/${segments.length}\u2026`);
+      return buildSceneSegment(segment, i, tmpDir);
+    });
     const finalPath = path8.join(outputDir, "composed-final.mp4");
+    report("Composing the final video\u2026");
     SceneComposer.composeFromSegments({
       scenePaths,
       scenes,
@@ -22267,7 +22285,7 @@ ${issueContent.body}`);
       skipSubtitles,
       audioPath: audioPath ?? void 0
     });
-    console.log(`Video composed: ${finalPath}`);
+    console.error(`Video composed: ${finalPath}`);
     writeCompileLog({ steps, segments, stepAudioFiles, frameDurations, duplicates }, outputDir);
     return {
       videoPath: finalPath,
@@ -22286,13 +22304,31 @@ ${issueContent.body}`);
 if (process.argv[1] && /compose-session\.[tj]s$/.test(process.argv[1])) {
   const outputDir = process.argv[2];
   if (!outputDir) {
-    console.error('Usage: compose-session.ts <output-dir> [--scenario "name"]');
+    console.error('Usage: compose-session.ts <output-dir> [--scenario "name"] [--expert] [--skip-video]');
     process.exit(1);
   }
   let scenarioName;
   const scenarioIdx = process.argv.indexOf("--scenario");
   if (scenarioIdx !== -1 && process.argv[scenarioIdx + 1]) {
     scenarioName = process.argv[scenarioIdx + 1];
+  }
+  const KNOWN_FLAGS = ["--scenario", "--skip-video", "--expert"];
+  const unknown2 = [];
+  for (let i = 3; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg === "--scenario") {
+      i++;
+      continue;
+    }
+    if (arg.startsWith("--") && !KNOWN_FLAGS.includes(arg)) {
+      unknown2.push(arg);
+    }
+  }
+  if (unknown2.length) {
+    console.error(`Unknown option(s): ${unknown2.join(", ")}
+Usage: compose-session.ts <output-dir> [--scenario "name"] [--expert] [--skip-video]
+Note: the expert findings mode is --expert here; "mode: expert" is the MCP tool spelling.`);
+    process.exit(1);
   }
   const skipVideo = process.argv.includes("--skip-video");
   const mode = process.argv.includes("--expert") ? "expert" : "simulator";
@@ -22412,6 +22448,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  const progressToken = request.params._meta?.progressToken;
   try {
     switch (name) {
       case "ux_record_start":
@@ -22419,7 +22456,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "ux_record_step":
         return handleRecordStep(args);
       case "ux_record_compile":
-        return handleRecordCompile(args);
+        return handleRecordCompile(args, progressToken);
       default:
         return {
           content: [{ type: "text", text: `Unknown tool: ${name}` }],
@@ -22476,7 +22513,7 @@ function handleRecordStep(args) {
     }]
   };
 }
-function handleRecordCompile(args) {
+function handleRecordCompile(args, progressToken) {
   const outputDir = args.outputDir;
   const scenarioName = args.scenarioName;
   const mode = args.mode ?? "simulator";
@@ -22485,7 +22522,15 @@ function handleRecordCompile(args) {
     stepSession.finalize();
     stepSession = null;
   }
-  const result = compileFromSteps({ outputDir, scenarioName, mode, skipVideo });
+  let progress = 0;
+  const onProgress = progressToken === void 0 ? void 0 : (message) => {
+    progress++;
+    void server.notification({
+      method: "notifications/progress",
+      params: { progressToken, progress, message }
+    });
+  };
+  const result = compileFromSteps({ outputDir, scenarioName, mode, skipVideo, onProgress });
   return {
     content: [{
       type: "text",

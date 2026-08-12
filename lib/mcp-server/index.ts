@@ -133,6 +133,7 @@ server.setRequestHandler( ListToolsRequestSchema, async () => ( {
 
 server.setRequestHandler( CallToolRequestSchema, async ( request ) => {
 	const { name, arguments: args } = request.params;
+	const progressToken = request.params._meta?.progressToken;
 
 	try {
 		switch ( name ) {
@@ -141,7 +142,7 @@ server.setRequestHandler( CallToolRequestSchema, async ( request ) => {
 			case 'ux_record_step':
 				return handleRecordStep( args as Record< string, unknown > );
 			case 'ux_record_compile':
-				return handleRecordCompile( args as Record< string, unknown > );
+				return handleRecordCompile( args as Record< string, unknown >, progressToken );
 			default:
 				return {
 					content: [ { type: 'text' as const, text: `Unknown tool: ${ name }` } ],
@@ -211,7 +212,10 @@ function handleRecordStep( args: Record< string, unknown > ) {
 	};
 }
 
-function handleRecordCompile( args: Record< string, unknown > ) {
+function handleRecordCompile(
+	args: Record< string, unknown >,
+	progressToken?: string | number
+) {
 	const outputDir = args.outputDir as string;
 	const scenarioName = args.scenarioName as string | undefined;
 	const mode = ( args.mode as FindingsMode | undefined ) ?? 'simulator';
@@ -223,7 +227,22 @@ function handleRecordCompile( args: Record< string, unknown > ) {
 		stepSession = null;
 	}
 
-	const result = compileFromSteps( { outputDir, scenarioName, mode, skipVideo } );
+	// Speak up as we go. A full compile runs for many minutes of TTS and
+	// ffmpeg work, and a silent stretch that long gets the call killed by
+	// the client's idle timeout.
+	let progress = 0;
+	const onProgress =
+		progressToken === undefined
+			? undefined
+			: ( message: string ) => {
+					progress++;
+					void server.notification( {
+						method: 'notifications/progress',
+						params: { progressToken, progress, message },
+					} );
+			  };
+
+	const result = compileFromSteps( { outputDir, scenarioName, mode, skipVideo, onProgress } );
 
 	return {
 		content: [ {
