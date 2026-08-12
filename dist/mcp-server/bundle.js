@@ -21745,15 +21745,33 @@ function classifyAndReport(options) {
     if (isPositive) {
       workedWell.push(line);
     }
+    let best;
     for (const rule of options.rules) {
-      if (rule.pattern.test(text) && (!rule.excludePositive || !isPositive)) {
-        buckets[rule.key].push(line);
+      if (rule.excludePositive && isPositive) {
+        continue;
+      }
+      const matches = text.match(new RegExp(rule.pattern.source, rule.pattern.flags.replace("g", "") + "g"));
+      const score = matches ? matches.length : 0;
+      if (score > 0 && (!best || score > best.score)) {
+        best = { rule, score };
+      }
+    }
+    if (best) {
+      buckets[best.rule.key].push(line);
+      if (!isPositive) {
         frictionPoints.push(line);
       }
     }
   }
   const uniqueFriction = [...new Set(frictionPoints)];
-  const suggestions = uniqueFriction.map((fp) => `Review: ${fp.slice(0, 120)}`);
+  const suggestions = uniqueFriction.map((fp) => {
+    if (fp.length <= 160) {
+      return fp;
+    }
+    const cut = fp.slice(0, 160);
+    const lastSpace = cut.lastIndexOf(" ");
+    return `${cut.slice(0, lastSpace > 0 ? lastSpace : 160)}\u2026`;
+  });
   const sections = options.buildSections(buckets, workedWell, suggestions);
   const lines = [];
   lines.push(`## ${options.title}`);
@@ -22151,7 +22169,11 @@ function guessSecondaryPersona(segment) {
   return "secondary";
 }
 function compileFromSteps(options) {
-  const { outputDir, scenarioName, mode = "simulator", skipVideo = false, transitionSec = 0.5, skipSubtitles = true } = options;
+  const { outputDir, scenarioName, mode = "simulator", skipVideo = false, transitionSec = 0.5, skipSubtitles = true, onProgress } = options;
+  const report = (message) => {
+    console.log(message);
+    onProgress?.(message);
+  };
   const stepLog = StepLog.loadFromDirectory(outputDir);
   const steps = stepLog.getEntries();
   if (steps.length === 0) {
@@ -22214,8 +22236,10 @@ ${issueContent.body}`);
       });
     }
   }
-  console.log(`Compiling ${steps.length} steps (${batchItems.length} narrated)...`);
+  report(`Compiling ${steps.length} steps (${batchItems.length} narrated)...`);
+  report(`Generating ${batchItems.length} narration clips\u2026`);
   const batchResults = generateSpeechBatch(batchItems.map((b) => b.item));
+  report(`Narration done. Assembling video\u2026`);
   for (let i = 0; i < batchItems.length; i++) {
     const { stepIndex } = batchItems[i];
     const result = batchResults[i];
@@ -22286,13 +22310,21 @@ ${issueContent.body}`);
 if (process.argv[1] && /compose-session\.[tj]s$/.test(process.argv[1])) {
   const outputDir = process.argv[2];
   if (!outputDir) {
-    console.error('Usage: compose-session.ts <output-dir> [--scenario "name"]');
+    console.error('Usage: compose-session.ts <output-dir> [--scenario "name"] [--expert] [--skip-video]');
     process.exit(1);
   }
   let scenarioName;
   const scenarioIdx = process.argv.indexOf("--scenario");
   if (scenarioIdx !== -1 && process.argv[scenarioIdx + 1]) {
     scenarioName = process.argv[scenarioIdx + 1];
+  }
+  const KNOWN_FLAGS = ["--scenario", "--skip-video", "--expert"];
+  const unknown2 = process.argv.slice(3).filter((arg) => arg.startsWith("--") && !KNOWN_FLAGS.includes(arg));
+  if (unknown2.length) {
+    console.error(`Unknown option(s): ${unknown2.join(", ")}
+Usage: compose-session.ts <output-dir> [--scenario "name"] [--expert] [--skip-video]
+Note: the expert findings mode is --expert here; "mode: expert" is the MCP tool spelling.`);
+    process.exit(1);
   }
   const skipVideo = process.argv.includes("--skip-video");
   const mode = process.argv.includes("--expert") ? "expert" : "simulator";
@@ -22412,6 +22444,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  const progressToken = request.params._meta?.progressToken;
   try {
     switch (name) {
       case "ux_record_start":
@@ -22419,7 +22452,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "ux_record_step":
         return handleRecordStep(args);
       case "ux_record_compile":
-        return handleRecordCompile(args);
+        return handleRecordCompile(args, progressToken);
       default:
         return {
           content: [{ type: "text", text: `Unknown tool: ${name}` }],
@@ -22476,7 +22509,7 @@ function handleRecordStep(args) {
     }]
   };
 }
-function handleRecordCompile(args) {
+function handleRecordCompile(args, progressToken) {
   const outputDir = args.outputDir;
   const scenarioName = args.scenarioName;
   const mode = args.mode ?? "simulator";
@@ -22485,7 +22518,15 @@ function handleRecordCompile(args) {
     stepSession.finalize();
     stepSession = null;
   }
-  const result = compileFromSteps({ outputDir, scenarioName, mode, skipVideo });
+  let progress = 0;
+  const onProgress = progressToken === void 0 ? void 0 : (message) => {
+    progress++;
+    void server.notification({
+      method: "notifications/progress",
+      params: { progressToken, progress, message }
+    });
+  };
+  const result = compileFromSteps({ outputDir, scenarioName, mode, skipVideo, onProgress });
   return {
     content: [{
       type: "text",

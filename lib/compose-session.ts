@@ -130,6 +130,12 @@ export interface CompileFromStepsOptions {
 	skipVideo?: boolean;
 	transitionSec?: number;
 	skipSubtitles?: boolean;
+	/**
+	 * Called as compilation moves between phases. TTS and assembly can each
+	 * run for many minutes, and a caller that hears nothing for that long
+	 * cannot tell a slow run from a dead one.
+	 */
+	onProgress?: ( message: string ) => void;
 }
 
 /**
@@ -152,7 +158,13 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 		skipVideo = false,
 		transitionSec = 0.5,
 		skipSubtitles = true,
+		onProgress,
 	} = options;
+	const report = ( message: string ) => {
+		// eslint-disable-next-line no-console
+		console.log( message );
+		onProgress?.( message );
+	};
 
 	const stepLog = StepLog.loadFromDirectory( outputDir );
 	const steps = stepLog.getEntries();
@@ -240,11 +252,12 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 		}
 	}
 
-	// eslint-disable-next-line no-console
-	console.log( `Compiling ${ steps.length } steps (${ batchItems.length } narrated)...` );
+	report( `Compiling ${ steps.length } steps (${ batchItems.length } narrated)...` );
 
 	// Single batch call — loads model once
+	report( `Generating ${ batchItems.length } narration clips…` );
 	const batchResults = generateSpeechBatch( batchItems.map( ( b ) => b.item ) );
+	report( `Narration done. Assembling video…` );
 
 	for ( let i = 0; i < batchItems.length; i++ ) {
 		const { stepIndex } = batchItems[ i ];
@@ -349,7 +362,9 @@ if ( process.argv[ 1 ] && /compose-session\.[tj]s$/.test( process.argv[ 1 ] ) ) 
 	const outputDir = process.argv[ 2 ];
 	if ( ! outputDir ) {
 		// eslint-disable-next-line no-console
-		console.error( 'Usage: compose-session.ts <output-dir> [--scenario "name"]' );
+		console.error(
+			'Usage: compose-session.ts <output-dir> [--scenario "name"] [--expert] [--skip-video]'
+		);
 		process.exit( 1 );
 	}
 
@@ -357,6 +372,23 @@ if ( process.argv[ 1 ] && /compose-session\.[tj]s$/.test( process.argv[ 1 ] ) ) 
 	const scenarioIdx = process.argv.indexOf( '--scenario' );
 	if ( scenarioIdx !== -1 && process.argv[ scenarioIdx + 1 ] ) {
 		scenarioName = process.argv[ scenarioIdx + 1 ];
+	}
+
+	// Reject anything we do not understand. Unknown flags used to be ignored
+	// in silence, so `--mode expert` (the MCP spelling) quietly produced a
+	// simulator report and there was no way to tell from the output.
+	const KNOWN_FLAGS = [ '--scenario', '--skip-video', '--expert' ];
+	const unknown = process.argv
+		.slice( 3 )
+		.filter( ( arg ) => arg.startsWith( '--' ) && ! KNOWN_FLAGS.includes( arg ) );
+	if ( unknown.length ) {
+		// eslint-disable-next-line no-console
+		console.error(
+			`Unknown option(s): ${ unknown.join( ', ' ) }\n` +
+				`Usage: compose-session.ts <output-dir> [--scenario "name"] [--expert] [--skip-video]\n` +
+				`Note: the expert findings mode is --expert here; "mode: expert" is the MCP tool spelling.`
+		);
+		process.exit( 1 );
 	}
 
 	const skipVideo = process.argv.includes( '--skip-video' );

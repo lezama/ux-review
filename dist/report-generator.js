@@ -197,15 +197,42 @@ function classifyAndReport(options) {
         if (isPositive) {
             workedWell.push(line);
         }
+        // Assign each observation to a single bucket, the rule whose pattern
+        // matches it most. Testing every rule independently used to file one
+        // observation under several lenses at once, which padded the report
+        // and made two lenses look like two findings.
+        let best;
         for (const rule of options.rules) {
-            if (rule.pattern.test(text) && (!rule.excludePositive || !isPositive)) {
-                buckets[rule.key].push(line);
+            if (rule.excludePositive && isPositive) {
+                continue;
+            }
+            const matches = text.match(new RegExp(rule.pattern.source, rule.pattern.flags.replace('g', '') + 'g'));
+            const score = matches ? matches.length : 0;
+            if (score > 0 && (!best || score > best.score)) {
+                best = { rule, score };
+            }
+        }
+        if (best) {
+            buckets[best.rule.key].push(line);
+            // A positive note is not also a friction point. Listing it as both
+            // is how the worst finding of a run once appeared under what
+            // worked well.
+            if (!isPositive) {
                 frictionPoints.push(line);
             }
         }
     }
     const uniqueFriction = [...new Set(frictionPoints)];
-    const suggestions = uniqueFriction.map((fp) => `Review: ${fp.slice(0, 120)}`);
+    // Cut on a word boundary. Slicing at a fixed width left every suggestion
+    // ending mid-word, which read like the report itself was broken.
+    const suggestions = uniqueFriction.map((fp) => {
+        if (fp.length <= 160) {
+            return fp;
+        }
+        const cut = fp.slice(0, 160);
+        const lastSpace = cut.lastIndexOf(' ');
+        return `${cut.slice(0, lastSpace > 0 ? lastSpace : 160)}…`;
+    });
     const sections = options.buildSections(buckets, workedWell, suggestions);
     const lines = [];
     lines.push(`## ${options.title}`);
