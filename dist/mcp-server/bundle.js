@@ -21745,19 +21745,9 @@ function classifyAndReport(options) {
     if (isPositive) {
       workedWell.push(line);
     }
-    let best;
-    for (const rule of options.rules) {
-      if (rule.excludePositive && isPositive) {
-        continue;
-      }
-      const matches = text.match(new RegExp(rule.pattern.source, rule.pattern.flags.replace("g", "") + "g"));
-      const score = matches ? matches.length : 0;
-      if (score > 0 && (!best || score > best.score)) {
-        best = { rule, score };
-      }
-    }
-    if (best) {
-      buckets[best.rule.key].push(line);
+    const matched = options.rules.find((rule) => !(rule.excludePositive && isPositive) && rule.pattern.test(text));
+    if (matched) {
+      buckets[matched.key].push(line);
       if (!isPositive) {
         frictionPoints.push(line);
       }
@@ -22171,7 +22161,7 @@ function guessSecondaryPersona(segment) {
 function compileFromSteps(options) {
   const { outputDir, scenarioName, mode = "simulator", skipVideo = false, transitionSec = 0.5, skipSubtitles = true, onProgress } = options;
   const report = (message) => {
-    console.log(message);
+    console.error(message);
     onProgress?.(message);
   };
   const stepLog = StepLog.loadFromDirectory(outputDir);
@@ -22186,16 +22176,16 @@ function compileFromSteps(options) {
   const findings = findingsGenerator({ actionLogPath, scenarioName });
   const findingsPath = path8.join(outputDir, "findings.md");
   fs9.writeFileSync(findingsPath, findings.markdown);
-  console.log(`Findings report: ${findingsPath}`);
+  console.error(`Findings report: ${findingsPath}`);
   const screenshotDir = path8.join(outputDir, "screenshots");
   const issueContent = generateIssueContent({ steps, findings, scenarioName, mode, screenshotDir });
   const issuePath = path8.join(outputDir, "issue.md");
   fs9.writeFileSync(issuePath, `# ${issueContent.title}
 
 ${issueContent.body}`);
-  console.log(`Issue template: ${issuePath} (${issueContent.screenshots.length} screenshots)`);
+  console.error(`Issue template: ${issuePath} (${issueContent.screenshots.length} screenshots)`);
   if (skipVideo) {
-    console.log(`Skipping video (skipVideo=true). ${steps.length} steps, ${personas.length} persona(s).`);
+    console.error(`Skipping video (skipVideo=true). ${steps.length} steps, ${personas.length} persona(s).`);
     return {
       videoPath: "",
       findingsPath,
@@ -22251,7 +22241,7 @@ ${issueContent.body}`);
     frameDurations.set(stepIndex, durationMs);
     stepAudioFiles.set(stepIndex, result.outputPath);
   }
-  console.log(`TTS generated for ${stepAudioFiles.size} narrated steps`);
+  console.error(`TTS generated for ${stepAudioFiles.size} narrated steps`);
   const duplicates = [];
   for (let i = 1; i < steps.length; i++) {
     if (steps[i].screenshot === steps[i - 1].screenshot) {
@@ -22262,7 +22252,7 @@ ${issueContent.body}`);
     console.warn(`[compile] ${duplicates.length} duplicate screenshot(s) detected:`, duplicates.map((d) => `step ${d.step} (${d.screenshot})`).join(", "));
   }
   const segments = stepLog.toSceneSegments(frameDurations);
-  console.log(`Composing ${segments.length} scenes for ${personas.length} persona(s): ${personas.join(", ")}`);
+  console.error(`Composing ${segments.length} scenes for ${personas.length} persona(s): ${personas.join(", ")}`);
   const audioPath = buildAudioFromSteps(steps, segments, stepAudioFiles, frameDurations, outputDir);
   let cumulativeMs = 0;
   const scenes = segments.map((seg) => {
@@ -22281,8 +22271,12 @@ ${issueContent.body}`);
   const tmpDir = path8.join(outputDir, ".compose-tmp");
   fs9.mkdirSync(tmpDir, { recursive: true });
   try {
-    const scenePaths = segments.map((segment, i) => buildSceneSegment(segment, i, tmpDir));
+    const scenePaths = segments.map((segment, i) => {
+      report(`Encoding scene ${i + 1}/${segments.length}\u2026`);
+      return buildSceneSegment(segment, i, tmpDir);
+    });
     const finalPath = path8.join(outputDir, "composed-final.mp4");
+    report("Composing the final video\u2026");
     SceneComposer.composeFromSegments({
       scenePaths,
       scenes,
@@ -22291,7 +22285,7 @@ ${issueContent.body}`);
       skipSubtitles,
       audioPath: audioPath ?? void 0
     });
-    console.log(`Video composed: ${finalPath}`);
+    console.error(`Video composed: ${finalPath}`);
     writeCompileLog({ steps, segments, stepAudioFiles, frameDurations, duplicates }, outputDir);
     return {
       videoPath: finalPath,
@@ -22319,7 +22313,17 @@ if (process.argv[1] && /compose-session\.[tj]s$/.test(process.argv[1])) {
     scenarioName = process.argv[scenarioIdx + 1];
   }
   const KNOWN_FLAGS = ["--scenario", "--skip-video", "--expert"];
-  const unknown2 = process.argv.slice(3).filter((arg) => arg.startsWith("--") && !KNOWN_FLAGS.includes(arg));
+  const unknown2 = [];
+  for (let i = 3; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg === "--scenario") {
+      i++;
+      continue;
+    }
+    if (arg.startsWith("--") && !KNOWN_FLAGS.includes(arg)) {
+      unknown2.push(arg);
+    }
+  }
   if (unknown2.length) {
     console.error(`Unknown option(s): ${unknown2.join(", ")}
 Usage: compose-session.ts <output-dir> [--scenario "name"] [--expert] [--skip-video]

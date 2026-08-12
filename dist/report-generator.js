@@ -197,23 +197,13 @@ function classifyAndReport(options) {
         if (isPositive) {
             workedWell.push(line);
         }
-        // Assign each observation to a single bucket, the rule whose pattern
-        // matches it most. Testing every rule independently used to file one
-        // observation under several lenses at once, which padded the report
-        // and made two lenses look like two findings.
-        let best;
-        for (const rule of options.rules) {
-            if (rule.excludePositive && isPositive) {
-                continue;
-            }
-            const matches = text.match(new RegExp(rule.pattern.source, rule.pattern.flags.replace('g', '') + 'g'));
-            const score = matches ? matches.length : 0;
-            if (score > 0 && (!best || score > best.score)) {
-                best = { rule, score };
-            }
-        }
-        if (best) {
-            buckets[best.rule.key].push(line);
+        // One observation, one lens. Testing every rule independently used to
+        // file the same observation under several lenses at once, which
+        // padded the report and made one finding look like three. Rules are
+        // declared in priority order, so the first match is the right one.
+        const matched = options.rules.find((rule) => !(rule.excludePositive && isPositive) && rule.pattern.test(text));
+        if (matched) {
+            buckets[matched.key].push(line);
             // A positive note is not also a friction point. Listing it as both
             // is how the worst finding of a run once appeared under what
             // worked well.

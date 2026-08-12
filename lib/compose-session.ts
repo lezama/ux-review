@@ -161,8 +161,10 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 		onProgress,
 	} = options;
 	const report = ( message: string ) => {
+		// stderr, not stdout. The MCP server calls this in-process over a
+		// stdio transport, where stdout carries the JSON-RPC frames.
 		// eslint-disable-next-line no-console
-		console.log( message );
+		console.error( message );
 		onProgress?.( message );
 	};
 
@@ -186,7 +188,7 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 	fs.writeFileSync( findingsPath, findings.markdown );
 
 	// eslint-disable-next-line no-console
-	console.log( `Findings report: ${ findingsPath }` );
+	console.error( `Findings report: ${ findingsPath }` );
 
 	// Generate issue-ready content
 	const screenshotDir = path.join( outputDir, 'screenshots' );
@@ -195,11 +197,11 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 	fs.writeFileSync( issuePath, `# ${ issueContent.title }\n\n${ issueContent.body }` );
 
 	// eslint-disable-next-line no-console
-	console.log( `Issue template: ${ issuePath } (${ issueContent.screenshots.length } screenshots)` );
+	console.error( `Issue template: ${ issuePath } (${ issueContent.screenshots.length } screenshots)` );
 
 	if ( skipVideo ) {
 		// eslint-disable-next-line no-console
-		console.log( `Skipping video (skipVideo=true). ${ steps.length } steps, ${ personas.length } persona(s).` );
+		console.error( `Skipping video (skipVideo=true). ${ steps.length } steps, ${ personas.length } persona(s).` );
 		return {
 			videoPath: '',
 			findingsPath,
@@ -273,7 +275,7 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 	}
 
 	// eslint-disable-next-line no-console
-	console.log( `TTS generated for ${ stepAudioFiles.size } narrated steps` );
+	console.error( `TTS generated for ${ stepAudioFiles.size } narrated steps` );
 
 	// Detect duplicate screenshots
 	const duplicates: Array< { step: number; screenshot: string } > = [];
@@ -292,7 +294,7 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 	const segments = stepLog.toSceneSegments( frameDurations );
 
 	// eslint-disable-next-line no-console
-	console.log(
+	console.error(
 		`Composing ${ segments.length } scenes for ${ personas.length } persona(s): ${ personas.join( ', ' ) }`
 	);
 
@@ -320,12 +322,14 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 
 	try {
 		// Build per-scene segment MP4s
-		const scenePaths = segments.map( ( segment, i ) =>
-			buildSceneSegment( segment, i, tmpDir )
-		);
+		const scenePaths = segments.map( ( segment, i ) => {
+			report( `Encoding scene ${ i + 1 }/${ segments.length }…` );
+			return buildSceneSegment( segment, i, tmpDir );
+		} );
 
 		const finalPath = path.join( outputDir, 'composed-final.mp4' );
 
+		report( 'Composing the final video…' );
 		SceneComposer.composeFromSegments( {
 			scenePaths,
 			scenes,
@@ -336,7 +340,7 @@ export function compileFromSteps( options: CompileFromStepsOptions ): ComposeRes
 		} );
 
 		// eslint-disable-next-line no-console
-		console.log( `Video composed: ${ finalPath }` );
+		console.error( `Video composed: ${ finalPath }` );
 
 		// Write compile diagnostics log
 		writeCompileLog( { steps, segments, stepAudioFiles, frameDurations, duplicates }, outputDir );
@@ -378,9 +382,18 @@ if ( process.argv[ 1 ] && /compose-session\.[tj]s$/.test( process.argv[ 1 ] ) ) 
 	// in silence, so `--mode expert` (the MCP spelling) quietly produced a
 	// simulator report and there was no way to tell from the output.
 	const KNOWN_FLAGS = [ '--scenario', '--skip-video', '--expert' ];
-	const unknown = process.argv
-		.slice( 3 )
-		.filter( ( arg ) => arg.startsWith( '--' ) && ! KNOWN_FLAGS.includes( arg ) );
+	const unknown: string[] = [];
+	for ( let i = 3; i < process.argv.length; i++ ) {
+		const arg = process.argv[ i ];
+		if ( arg === '--scenario' ) {
+			// Skip its value, which may itself start with dashes.
+			i++;
+			continue;
+		}
+		if ( arg.startsWith( '--' ) && ! KNOWN_FLAGS.includes( arg ) ) {
+			unknown.push( arg );
+		}
+	}
 	if ( unknown.length ) {
 		// eslint-disable-next-line no-console
 		console.error(
