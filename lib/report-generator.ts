@@ -282,6 +282,7 @@ function classifyAndReport( options: {
 
 	const workedWell: string[] = [];
 	const frictionPoints: string[] = [];
+	const unclassified: string[] = [];
 	const buckets: Record< string, string[] > = {};
 
 	for ( const rule of options.rules ) {
@@ -306,6 +307,12 @@ function classifyAndReport( options: {
 		const matched = options.rules.find(
 			( rule ) => ! ( rule.excludePositive && isPositive ) && rule.pattern.test( text )
 		);
+		if ( ! matched && ! isPositive ) {
+			// Nothing matched. These used to be dropped, so a report could
+			// silently omit a third of the session, and the observations that
+			// went missing were often the ones phrased most specifically.
+			unclassified.push( line );
+		}
 		if ( matched ) {
 			buckets[ matched.key ].push( line );
 			// A positive note is not also a friction point. Listing it as both
@@ -317,6 +324,7 @@ function classifyAndReport( options: {
 		}
 	}
 
+	frictionPoints.push( ...unclassified );
 	const uniqueFriction = [ ...new Set( frictionPoints ) ];
 	// Cut on a word boundary. Slicing at a fixed width left every suggestion
 	// ending mid-word, which read like the report itself was broken.
@@ -329,6 +337,18 @@ function classifyAndReport( options: {
 		return `${ cut.slice( 0, lastSpace > 0 ? lastSpace : 160 ) }…`;
 	} );
 	const sections = options.buildSections( buckets, workedWell, suggestions );
+	// Appended rather than handed to buildSections, so every mode gets this
+	// without each one having to remember to ask for it.
+	const suggestionsIdx = sections.findIndex( ( s ) => s.numbered );
+	const catchAll: FindingsSection = {
+		title: 'Other Observations',
+		items: [ ...new Set( unclassified ) ],
+	};
+	if ( suggestionsIdx === -1 ) {
+		sections.push( catchAll );
+	} else {
+		sections.splice( suggestionsIdx, 0, catchAll );
+	}
 
 	const lines: string[] = [];
 	lines.push( `## ${ options.title }` );
