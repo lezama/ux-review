@@ -21732,6 +21732,7 @@ function classifyAndReport(options) {
   const scenario = options.scenarioName ?? options.title;
   const workedWell = [];
   const frictionPoints = [];
+  const unclassified = [];
   const buckets = {};
   for (const rule of options.rules) {
     buckets[rule.key] = [];
@@ -21746,6 +21747,9 @@ function classifyAndReport(options) {
       workedWell.push(line);
     }
     const matched = options.rules.find((rule) => !(rule.excludePositive && isPositive) && rule.pattern.test(text));
+    if (!matched && !isPositive) {
+      unclassified.push(line);
+    }
     if (matched) {
       buckets[matched.key].push(line);
       if (!isPositive) {
@@ -21753,6 +21757,7 @@ function classifyAndReport(options) {
       }
     }
   }
+  frictionPoints.push(...unclassified);
   const uniqueFriction = [...new Set(frictionPoints)];
   const suggestions = uniqueFriction.map((fp) => {
     if (fp.length <= 160) {
@@ -21763,6 +21768,16 @@ function classifyAndReport(options) {
     return `${cut.slice(0, lastSpace > 0 ? lastSpace : 160)}\u2026`;
   });
   const sections = options.buildSections(buckets, workedWell, suggestions);
+  const suggestionsIdx = sections.findIndex((s) => s.numbered);
+  const catchAll = {
+    title: "Other Observations",
+    items: [...new Set(unclassified)]
+  };
+  if (suggestionsIdx === -1) {
+    sections.push(catchAll);
+  } else {
+    sections.splice(suggestionsIdx, 0, catchAll);
+  }
   const lines = [];
   lines.push(`## ${options.title}`);
   lines.push("");
@@ -22352,7 +22367,7 @@ ${stderr.toString().split("\n").slice(-25).join("\n")}`);
 
 // dist/mcp-server/index.js
 var stepSession = null;
-var server = new Server({ name: "ux-recording", version: "0.3.3" }, { capabilities: { tools: {} } });
+var server = new Server({ name: "ux-recording", version: "0.3.4" }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
